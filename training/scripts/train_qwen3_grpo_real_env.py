@@ -276,24 +276,29 @@ class RealEnvironmentGRPOTrainer:
         # Create model config compatible with QwenPolicy
         model_name = self.configs['model'].get('name', 'Qwen/Qwen2.5-0.5B-Instruct')
         
-        # Use smaller max_length for MPS memory constraints
-        max_length = 1024  # Reduced for MPS
+        # Adjust max_length based on device
+        max_length = 2048 if self.device.type == 'cuda' else 1024  # Larger for CUDA
         
         model_config = {
             'model_name': model_name,
             'tokenizer_name': model_name,  # Use same name for tokenizer
-            'torch_dtype': 'float32',  # Use float32 for MPS
-            'device_map': None,  # Handle device mapping ourselves
+            'torch_dtype': 'float16' if self.device.type == 'cuda' else 'float32',  # FP16 for CUDA
+            'device_map': 'auto' if self.device.type == 'cuda' else None,  # Auto device map for CUDA
             'trust_remote_code': True,
             'max_length': max_length,  # Reduced for MPS
             'stop_sequences': ["</tool_call>", "</think>", "<|im_end|>"],
             'memory_optimization': {
-                'torch_dtype': 'float32',  # MPS compatible
+                'torch_dtype': 'float16' if self.device.type == 'cuda' else 'float32',
                 'load_in_4bit': False,
                 'load_in_8bit': False,
-                'device_map': None,
+                'device_map': 'auto' if self.device.type == 'cuda' else None,
                 'low_cpu_mem_usage': True,
                 'trust_remote_code': True
+            },
+            'quantization': {
+                'bnb_4bit_compute_dtype': 'float16',
+                'bnb_4bit_use_double_quant': True,
+                'bnb_4bit_quant_type': 'nf4'
             },
             'lora_mode': {
                 'enabled': self.configs['model'].get('use_lora', True),
@@ -331,12 +336,17 @@ class RealEnvironmentGRPOTrainer:
         logger.info("Creating policy with value head...")
         value_head_hidden_dim = self.configs['model'].get('value_head_hidden_dim', 512)  # Smaller for MPS
         
+        # Enable 4-bit quantization for CUDA, disable for MPS/CPU
+        enable_4bit = (self.device.type == 'cuda' and 
+                      self.configs['model'].get('load_in_4bit', True) and
+                      self.configs['model'].get('use_lora', True))
+        
         self.policy = QwenPolicyWithValuePrompting(
             model_config_path=model_config_path,
             training_config_path=training_config_path,
             use_lora=self.configs['model'].get('use_lora', True),
             device=str(self.device),
-            load_in_4bit=False,  # Disable for MPS compatibility
+            load_in_4bit=enable_4bit,
             value_head_hidden_dim=value_head_hidden_dim
         )
         
@@ -347,7 +357,7 @@ class RealEnvironmentGRPOTrainer:
             training_config_path=training_config_path,
             use_lora=self.configs['model'].get('use_lora', True),
             device=str(self.device),
-            load_in_4bit=False,
+            load_in_4bit=enable_4bit,
             value_head_hidden_dim=value_head_hidden_dim
         )
         
@@ -401,6 +411,24 @@ class RealEnvironmentGRPOTrainer:
         logger.info(f"  - Reference policy updates every {self.trainer.ref_update_freq} steps ✓")
         logger.info(f"  - Gradient clipping fix for mixed precision ✓")
         logger.info(f"  - Max gradient norm: {self.trainer.max_grad_norm}")
+        
+        # Enable WandB gradient tracking if wandb is initialized
+        if self.use_wandb and wandb.run is not None:
+            # Watch the model for gradient tracking
+            wandb.watch(
+                self.policy.model,  # Watch the main policy model
+                log="all",  # Log gradients and parameters
+                log_freq=10,  # Log every 10 batches
+                log_graph=False  # Don't log computation graph (too large)
+            )
+            # Also watch the value head separately
+            wandb.watch(
+                self.policy.value_head,
+                log="all",
+                log_freq=10,
+                log_graph=False
+            )
+            logger.info("✅ WandB gradient tracking enabled for policy and value head")
     
     async def setup_environment(self):
         """Setup shared tool manager and trajectory collector"""
@@ -623,15 +651,52 @@ class RealEnvironmentGRPOTrainer:
                     'reward': f"{np.mean(trajectory_rewards):.3f}"
                 })
                 
-                # Log to wandb
+                # Comprehensive logging to wandb
                 if self.use_wandb:
-                    wandb.log({
+                    # Calculate additional metrics
+                    log_metrics = {
                         'step': self.global_step,
                         'epoch': epoch,
-                        'avg_trajectory_reward': np.mean(trajectory_rewards),
-                        'avg_trajectory_length': np.mean(trajectory_lengths),
-                        **metrics
-                    })
+                        
+                        # Rewards - detailed statistics
+                        'rewards/mean': np.mean(trajectory_rewards) if trajectory_rewards else 0,
+                        'rewards/std': np.std(trajectory_rewards) if trajectory_rewards else 0,
+                        'rewards/min': np.min(trajectory_rewards) if trajectory_rewards else 0,
+                        'rewards/max': np.max(trajectory_rewards) if trajectory_rewards else 0,
+                        'rewards/median': np.median(trajectory_rewards) if trajectory_rewards else 0,
+                        
+                        # Trajectory lengths
+                        'trajectories/avg_length': np.mean(trajectory_lengths) if trajectory_lengths else 0,
+                        'trajectories/max_length': np.max(trajectory_lengths) if trajectory_lengths else 0,
+                        'trajectories/min_length': np.min(trajectory_lengths) if trajectory_lengths else 0,
+                        'trajectories/count': len(trajectories),
+                        
+                        # Losses from metrics
+                        'losses/total': metrics.get('total_loss', 0),
+                        'losses/policy': metrics.get('policy_loss', 0),
+                        'losses/value': metrics.get('value_loss', 0),
+                        'losses/entropy': metrics.get('entropy', 0),
+                        
+                        # KL and advantages
+                        'training/kl_divergence': metrics.get('kl_divergence', 0),
+                        'training/kl_coef': metrics.get('kl_coef', 0),
+                        'training/avg_advantage': metrics.get('avg_advantage', 0),
+                        'training/std_advantage': metrics.get('std_advantage', 0),
+                        'training/clip_fraction': metrics.get('clip_fraction', 0),
+                        
+                        # Learning rate
+                        'training/learning_rate': self.trainer.optimizer.param_groups[0]['lr'],
+                        
+                        # GPU metrics if available
+                        'system/gpu_memory_allocated': torch.cuda.memory_allocated() / (1024**3) if torch.cuda.is_available() else 0,
+                        'system/gpu_memory_reserved': torch.cuda.memory_reserved() / (1024**3) if torch.cuda.is_available() else 0,
+                    }
+                    
+                    # Add gradient norm if available
+                    if hasattr(self.trainer, 'grad_norm'):
+                        log_metrics['gradients/norm'] = self.trainer.grad_norm
+                    
+                    wandb.log(log_metrics)
                 
                 self.global_step += 1
                 
@@ -794,7 +859,34 @@ def main():
         default='training/configs/training_config_qwen3_0.6b.yaml',
         help='Path to training configuration file'
     )
+    parser.add_argument(
+        '--device',
+        type=str,
+        choices=['cuda', 'mps', 'cpu', 'auto'],
+        default='auto',
+        help='Device to use for training'
+    )
+    parser.add_argument(
+        '--mixed-precision',
+        type=str,
+        choices=['no', 'fp16', 'bf16'],
+        default='no',
+        help='Mixed precision training mode'
+    )
+    parser.add_argument(
+        '--enable-profiling',
+        action='store_true',
+        help='Enable GPU profiling for performance analysis'
+    )
     args = parser.parse_args()
+    
+    # Override device if specified
+    if args.device != 'auto':
+        os.environ['DEVICE_TYPE'] = args.device
+    
+    # Set mixed precision if specified
+    if args.mixed_precision != 'no':
+        os.environ['MIXED_PRECISION'] = args.mixed_precision
     
     # Create trainer
     trainer = RealEnvironmentGRPOTrainer(args.config)

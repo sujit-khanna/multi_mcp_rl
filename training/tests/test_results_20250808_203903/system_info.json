@@ -1,0 +1,17 @@
+{
+  "success": true,
+  "system_info": {
+    "platform": "Linux-6.8.0-60-generic-x86_64-with-glibc2.35",
+    "python_version": "3.12.11",
+    "pytorch_version": "2.8.0+cu128",
+    "cuda_available": true,
+    "mps_available": false,
+    "cuda_device_count": 1,
+    "cuda_device_name": "NVIDIA A100-SXM4-40GB",
+    "total_memory_gb": 216.25842666625977,
+    "available_memory_gb": 211.62708282470703
+  },
+  "test_name": "system_info",
+  "timestamp": 1754685544.9235415,
+  "duration": 1.451359748840332
+}

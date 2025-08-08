@@ -33,16 +33,21 @@ except ImportError:
 # Configure logging
 logger = logging.getLogger(__name__)
 
-# Load environment path
-ENV_PATH = "/Users/sujitkhanna/Desktop/ongoing_projects/cooking_time_rl/.env"
+# Load environment path - use relative path resolution
+PROJECT_ROOT = Path(__file__).parent.parent.absolute()
+ENV_PATH = PROJECT_ROOT / ".env"
+if not ENV_PATH.exists():
+    # Try parent directory
+    ENV_PATH = PROJECT_ROOT.parent / ".env"
 
-# MCP Server Configuration
+# MCP Server Configuration - use relative paths
+MCP_TOOLS_DIR = PROJECT_ROOT / "mcp_tools" / "limited"
 MCP_SERVERS = {
-    "slack": "/Users/sujitkhanna/Desktop/ongoing_projects/cooking_time_rl/skyrl_tool_agent/mcp_tools/limited/slack_limited_server.py",
-    "tavily": "/Users/sujitkhanna/Desktop/ongoing_projects/cooking_time_rl/skyrl_tool_agent/mcp_tools/limited/tavily_limited_server.py",
-    "polygon": "/Users/sujitkhanna/Desktop/ongoing_projects/cooking_time_rl/skyrl_tool_agent/mcp_tools/limited/polygon_limited_server.py",
-    "fmp": "/Users/sujitkhanna/Desktop/ongoing_projects/cooking_time_rl/skyrl_tool_agent/mcp_tools/limited/fmp_limited_server.py",
-    "python": "/Users/sujitkhanna/Desktop/ongoing_projects/cooking_time_rl/skyrl_tool_agent/mcp_tools/limited/python_execution_server.py"
+    "slack": str(MCP_TOOLS_DIR / "slack_limited_server.py"),
+    "tavily": str(MCP_TOOLS_DIR / "tavily_limited_server.py"),
+    "polygon": str(MCP_TOOLS_DIR / "polygon_limited_server.py"),
+    "fmp": str(MCP_TOOLS_DIR / "fmp_limited_server.py"),
+    "python": str(MCP_TOOLS_DIR / "python_execution_server.py")
 }
 
 
@@ -119,7 +124,7 @@ class SimpleSharedMCPToolManager:
         for server_name, server_path in MCP_SERVERS.items():
             try:
                 env_vars = dict(os.environ)
-                env_vars.update(dotenv_values(ENV_PATH))
+                env_vars.update(dotenv_values(str(ENV_PATH)))
                 
                 params = StdioServerParameters(
                     command=sys.executable,
@@ -197,7 +202,7 @@ class SimpleSharedMCPToolManager:
         
         # Use fresh connection (same as RealMCPToolManager for reliability)
         env_vars = dict(os.environ)
-        env_vars.update(dotenv_values(ENV_PATH))
+        env_vars.update(dotenv_values(str(ENV_PATH)))
         
         params = StdioServerParameters(
             command=sys.executable,

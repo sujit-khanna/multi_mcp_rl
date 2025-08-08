@@ -186,6 +186,9 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
         # FIX 3.1: Proper gradient handling for mixed precision
         grad_norm = self._optimization_step(total_loss)
         
+        # Store grad_norm as instance variable for external access
+        self.grad_norm = grad_norm
+        
         # Compile metrics
         metrics = {
             "policy_loss": policy_loss.item(),

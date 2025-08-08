@@ -3,7 +3,7 @@ algorithm: "grpo"                    # Group Relative Policy Optimization
 algorithm_version: "1.1"             # Version with fixed reference policy updates
 
 # GRPO Core Parameters
-group_size: 2                        # Reduced for MPS memory constraints
+group_size: 4                        # Increased for better GPU utilization
 kl_penalty_coef: 0.01               # Reduced from 0.1 to prevent gradient explosion
 target_kl_divergence: 0.01          # Target KL for adaptive penalty adjustment
 adaptive_kl_penalty: true           # Adapt KL penalty based on actual KL
@@ -45,10 +45,10 @@ episode_timeout_penalty: -1.0       # Penalty for exceeding max length
 early_termination_reward: 0.1       # Small reward for successful early termination
 
 # Rollout Collection Settings
-rollout_parallel_envs: 1             # Reduced to 1 for MPS memory constraints
-rollout_batch_size: 4                # Reduced for MPS memory
-episodes_per_update: 2               # Reduced for MPS memory
-max_rollout_length: 10               # Reduced for MPS memory
+rollout_parallel_envs: 8             # Increased for parallel trajectory collection
+rollout_batch_size: 16               # Increased for A100 GPU utilization
+episodes_per_update: 8               # Increased for more training data
+max_rollout_length: 20               # Increased for longer trajectories
 rollout_timeout_seconds: 300         # Timeout for rollout collection (5 minutes)
 
 # Training Stability and Regularization

@@ -1,7 +1,7 @@
-batch_size: 1
+batch_size: 16
 learning_rate: 5e-5
 num_epochs: 3
-output_dir: ./outputs/qwen3-0.6b-grpo
+output_dir: outputs/real-env-grpo-gpu-20250808-214452
 save_every: 1
 use_mixed_precision: true
 use_wandb: true

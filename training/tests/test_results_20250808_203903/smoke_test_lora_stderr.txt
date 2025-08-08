@@ -1,0 +1,121 @@
+INFO:__main__:SmokeTest initialized: mode=lora, device=cuda
+INFO:__main__:macOS Unified Memory Available: 209.9 GB
+INFO:__main__:Starting comprehensive smoke tests...
+INFO:__main__:Using temporary directory: /tmp/grpo_smoke_test_wlgoofif
+INFO:__main__:GPU Memory: 0.00GB allocated, 0.00GB cached
+INFO:__main__:System Memory: 0.73GB RSS
+INFO:__main__:Testing policy initialization...
+INFO:core.qwen_policy:Loaded configuration from /tmp/grpo_smoke_test_wlgoofif/model_config.yaml
+INFO:core.qwen_policy:Loaded configuration from /tmp/grpo_smoke_test_wlgoofif/training_config.yaml
+INFO:core.qwen_policy:Loading model: Qwen/Qwen2.5-1.5B-Instruct
+INFO:accelerate.utils.modeling:We will use 90% of the memory on device 0 for storing the model, and 10% for the buffer to avoid OOM. You can set `max_memory` in to a higher value to use more memory (at your own risk).
+INFO:core.qwen_policy:LoRA applied: 1,777,664 trainable / 1,545,491,968 total parameters (0.12% trainable)
+INFO:core.qwen_policy:Model loaded successfully on cuda
+INFO:core.qwen_policy:Generation config setup complete with 5 stop tokens
+INFO:core.qwen_policy:QwenPolicy initialized successfully in LoRA mode
+INFO:__main__:Policy initialized: 1,777,664 trainable parameters
+INFO:core.qwen_policy:Loaded configuration from /tmp/grpo_smoke_test_wlgoofif/model_config.yaml
+INFO:core.qwen_policy:Loaded configuration from /tmp/grpo_smoke_test_wlgoofif/training_config.yaml
+INFO:core.qwen_policy:Loading model: Qwen/Qwen2.5-1.5B-Instruct
+INFO:accelerate.utils.modeling:We will use 90% of the memory on device 0 for storing the model, and 10% for the buffer to avoid OOM. You can set `max_memory` in to a higher value to use more memory (at your own risk).
+INFO:core.qwen_policy:LoRA applied: 1,777,664 trainable / 1,545,491,968 total parameters (0.12% trainable)
+INFO:core.qwen_policy:Model loaded successfully on cuda
+INFO:core.qwen_policy:Generation config setup complete with 5 stop tokens
+INFO:core.qwen_policy:QwenPolicy initialized successfully in LoRA mode
+INFO:__main__:GPU Memory: 5.76GB allocated, 5.92GB cached
+INFO:__main__:System Memory: 0.96GB RSS
+INFO:__main__:Testing data loading...
+INFO:data.data_loader:Building task index...
+INFO:data.data_loader:Task index built: 5 tasks after sharding
+INFO:data.data_loader:Complexity distribution: {'easy': 2, 'medium': 2, 'hard': 1}
+INFO:data.data_loader:StreamingDataset initialized: /tmp/grpo_smoke_test_wlgoofif/test_data.json (json), shard 0/1, 5 tasks
+INFO:data.data_loader:CurriculumSampler initialized: {'easy': 0.3, 'medium': 0.5, 'hard': 0.2} -> {'easy': 0.1, 'medium': 0.4, 'hard': 0.5}
+INFO:data.data_loader:TaskBatcher initialized: target_turns=8, max_batch=3
+INFO:__main__:Data loading test passed: 5 tasks, 1 in batch
+INFO:__main__:GPU Memory: 5.76GB allocated, 5.92GB cached
+INFO:__main__:System Memory: 0.96GB RSS
+INFO:__main__:Testing trajectory collection...
+INFO:__main__:Trajectory collection test passed: 2 trajectories
+INFO:__main__:GPU Memory: 5.76GB allocated, 5.92GB cached
+INFO:__main__:System Memory: 0.96GB RSS
+INFO:__main__:Testing GRPO training...
+INFO:core.qwen_policy:Loaded configuration from /tmp/grpo_smoke_test_wlgoofif/model_config.yaml
+INFO:core.qwen_policy:Loaded configuration from /tmp/grpo_smoke_test_wlgoofif/training_config.yaml
+INFO:core.qwen_policy:Loading model: Qwen/Qwen2.5-1.5B-Instruct
+INFO:core.qwen_policy:Configured 4-bit quantization for LoRA training
+INFO:core.qwen_policy:LoRA applied: 1,777,664 trainable / 890,394,112 total parameters (0.20% trainable)
+INFO:core.qwen_policy:Model loaded successfully on cuda
+INFO:core.qwen_policy:Generation config setup complete with 5 stop tokens
+INFO:core.qwen_policy:QwenPolicy initialized successfully in LoRA mode
+INFO:core.grpo_trainer:Model has 506 total parameters
+INFO:core.grpo_trainer:Found 168 trainable parameters
+INFO:core.grpo_trainer:Using AdamW optimizer with lr=0.0001 for 168 parameters
+INFO:core.grpo_trainer:Setup linear scheduler with 1 warmup steps
+INFO:core.grpo_trainer:GRPOTrainer initialized with 1,777,664 trainable parameters
+INFO:core.grpo_trainer:GRPO config: gamma=0.99, lambda=0.95, clip=0.2, kl_coef=0.1
+INFO:core.qwen_policy:Enabled gradients for 168 LoRA parameters
+INFO:__main__:Running training step 1/3...
+INFO:core.grpo_trainer:Starting train_step with 2 trajectories
+INFO:core.grpo_trainer:Trajectory 0: task_id=smoke_test_001, length=2, rewards=[0.5, 1.0], states_count=2, actions_count=2
+INFO:core.grpo_trainer:Trajectory 1: task_id=smoke_test_002, length=2, rewards=[0.5, 1.0], states_count=2, actions_count=2
+INFO:core.grpo_trainer:Moving 2 trajectories to device cuda
+ERROR:core.grpo_trainer:❌ Error in train_step: RuntimeError: Only Tensors created explicitly by the user (graph leaves) support the deepcopy protocol at the moment.  If you were attempting to deepcopy a module, this may be because of a torch.nn.utils.weight_norm usage, see https://github.com/pytorch/pytorch/pull/103001
+ERROR:core.grpo_trainer:Train step error traceback:
+Traceback (most recent call last):
+  File "/home/ubuntu/projects/multi_mcp_rl/training/core/grpo_trainer.py", line 313, in train_step
+    trajectories = [traj.to_device(self.device) for traj in trajectories]
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/projects/multi_mcp_rl/training/core/grpo_trainer.py", line 81, in to_device
+    new_traj = copy.deepcopy(self)
+               ^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/lib/python3.12/copy.py", line 162, in deepcopy
+    y = _reconstruct(x, memo, *rv)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/lib/python3.12/copy.py", line 259, in _reconstruct
+    state = deepcopy(state, memo)
+            ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/lib/python3.12/copy.py", line 136, in deepcopy
+    y = copier(x, memo)
+        ^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/lib/python3.12/copy.py", line 221, in _deepcopy_dict
+    y[deepcopy(key, memo)] = deepcopy(value, memo)
+                             ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/lib/python3.12/copy.py", line 143, in deepcopy
+    y = copier(memo)
+        ^^^^^^^^^^^^
+  File "/home/ubuntu/projects/multi_mcp_rl/.venv/lib/python3.12/site-packages/torch/_tensor.py", line 136, in __deepcopy__
+    raise RuntimeError(
+RuntimeError: Only Tensors created explicitly by the user (graph leaves) support the deepcopy protocol at the moment.  If you were attempting to deepcopy a module, this may be because of a torch.nn.utils.weight_norm usage, see https://github.com/pytorch/pytorch/pull/103001
+
+ERROR:__main__:GRPO training failed: Only Tensors created explicitly by the user (graph leaves) support the deepcopy protocol at the moment.  If you were attempting to deepcopy a module, this may be because of a torch.nn.utils.weight_norm usage, see https://github.com/pytorch/pytorch/pull/103001
+ERROR:__main__:Traceback (most recent call last):
+  File "/home/ubuntu/projects/multi_mcp_rl/training/tests/smoke_test.py", line 514, in test_grpo_training
+    metrics = trainer.train_step(trajectories)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/projects/multi_mcp_rl/training/core/grpo_trainer.py", line 313, in train_step
+    trajectories = [traj.to_device(self.device) for traj in trajectories]
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/projects/multi_mcp_rl/training/core/grpo_trainer.py", line 81, in to_device
+    new_traj = copy.deepcopy(self)
+               ^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/lib/python3.12/copy.py", line 162, in deepcopy
+    y = _reconstruct(x, memo, *rv)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/lib/python3.12/copy.py", line 259, in _reconstruct
+    state = deepcopy(state, memo)
+            ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/lib/python3.12/copy.py", line 136, in deepcopy
+    y = copier(x, memo)
+        ^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/lib/python3.12/copy.py", line 221, in _deepcopy_dict
+    y[deepcopy(key, memo)] = deepcopy(value, memo)
+                             ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/lib/python3.12/copy.py", line 143, in deepcopy
+    y = copier(memo)
+        ^^^^^^^^^^^^
+  File "/home/ubuntu/projects/multi_mcp_rl/.venv/lib/python3.12/site-packages/torch/_tensor.py", line 136, in __deepcopy__
+    raise RuntimeError(
+RuntimeError: Only Tensors created explicitly by the user (graph leaves) support the deepcopy protocol at the moment.  If you were attempting to deepcopy a module, this may be because of a torch.nn.utils.weight_norm usage, see https://github.com/pytorch/pytorch/pull/103001
+
+ERROR:__main__:GRPO training failed, skipping checkpoint test
+INFO:__main__:Cleaned up temporary directory: /tmp/grpo_smoke_test_wlgoofif

@@ -1,0 +1,132 @@
+INFO:__main__:MemoryProfiler initialized: mode=lora, device=cuda
+INFO:__main__:Baseline memory usage: 0.00 GB
+INFO:__main__:Total system memory: 216.3 GB
+INFO:__main__:Starting comprehensive memory profiling...
+INFO:__main__:Using temporary directory: /tmp/grpo_memory_profile_yl2tp1fe
+INFO:__main__:Phase 1: Sequence length sweep
+INFO:__main__:Running sequence length sweep: lengths=[512, 1024], batch=1, grad_accum=1
+INFO:__main__:Profiling: seq_len=512, batch=1, grad_accum=1
+INFO:__main__:  Loading model...
+INFO:core.qwen_policy:Loaded configuration from /tmp/grpo_memory_profile_yl2tp1fe/model_config.yaml
+INFO:core.qwen_policy:Loaded configuration from /tmp/grpo_memory_profile_yl2tp1fe/training_config.yaml
+INFO:core.qwen_policy:Loading model: Qwen/Qwen2.5-1.5B-Instruct
+INFO:accelerate.utils.modeling:We will use 90% of the memory on device 0 for storing the model, and 10% for the buffer to avoid OOM. You can set `max_memory` in to a higher value to use more memory (at your own risk).
+INFO:core.qwen_policy:LoRA applied: 18,464,768 trainable / 1,562,179,072 total parameters (1.18% trainable)
+INFO:core.qwen_policy:Model loaded successfully on cuda
+INFO:core.qwen_policy:Generation config setup complete with 5 stop tokens
+INFO:core.qwen_policy:QwenPolicy initialized successfully in LoRA mode
+INFO:__main__:  Creating reference policy...
+INFO:core.qwen_policy:Loaded configuration from /tmp/grpo_memory_profile_yl2tp1fe/model_config.yaml
+INFO:core.qwen_policy:Loaded configuration from /tmp/grpo_memory_profile_yl2tp1fe/training_config.yaml
+INFO:core.qwen_policy:Loading model: Qwen/Qwen2.5-1.5B-Instruct
+INFO:accelerate.utils.modeling:We will use 90% of the memory on device 0 for storing the model, and 10% for the buffer to avoid OOM. You can set `max_memory` in to a higher value to use more memory (at your own risk).
+INFO:core.qwen_policy:LoRA applied: 18,464,768 trainable / 1,562,179,072 total parameters (1.18% trainable)
+INFO:core.qwen_policy:Model loaded successfully on cuda
+INFO:core.qwen_policy:Generation config setup complete with 5 stop tokens
+INFO:core.qwen_policy:QwenPolicy initialized successfully in LoRA mode
+INFO:__main__:  Creating trainer...
+INFO:core.grpo_trainer:Model has 730 total parameters
+INFO:core.grpo_trainer:Found 392 trainable parameters
+INFO:core.grpo_trainer:Using AdamW optimizer with lr=0.0002 for 392 parameters
+INFO:core.grpo_trainer:Setup cosine scheduler with 100 warmup steps
+INFO:core.grpo_trainer:GRPOTrainer initialized with 18,464,768 trainable parameters
+INFO:core.grpo_trainer:GRPO config: gamma=0.99, lambda=0.95, clip=0.2, kl_coef=0.1
+INFO:__main__:  Running 3 training steps...
+INFO:core.qwen_policy:Enabled gradients for 392 LoRA parameters
+WARNING:core.qwen_policy:Empty or invalid messages: []
+INFO:core.grpo_trainer:Starting train_step with 1 trajectories
+INFO:core.grpo_trainer:Trajectory 0: task_id=memory_test_000, length=2, rewards=[0.5, 1.0], states_count=2, actions_count=2
+INFO:core.grpo_trainer:Moving 1 trajectories to device cuda
+ERROR:core.grpo_trainer:❌ Error in train_step: RuntimeError: Only Tensors created explicitly by the user (graph leaves) support the deepcopy protocol at the moment.  If you were attempting to deepcopy a module, this may be because of a torch.nn.utils.weight_norm usage, see https://github.com/pytorch/pytorch/pull/103001
+ERROR:core.grpo_trainer:Train step error traceback:
+Traceback (most recent call last):
+  File "/home/ubuntu/projects/multi_mcp_rl/training/core/grpo_trainer.py", line 313, in train_step
+    trajectories = [traj.to_device(self.device) for traj in trajectories]
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/projects/multi_mcp_rl/training/core/grpo_trainer.py", line 81, in to_device
+    new_traj = copy.deepcopy(self)
+               ^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/lib/python3.12/copy.py", line 162, in deepcopy
+    y = _reconstruct(x, memo, *rv)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/lib/python3.12/copy.py", line 259, in _reconstruct
+    state = deepcopy(state, memo)
+            ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/lib/python3.12/copy.py", line 136, in deepcopy
+    y = copier(x, memo)
+        ^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/lib/python3.12/copy.py", line 221, in _deepcopy_dict
+    y[deepcopy(key, memo)] = deepcopy(value, memo)
+                             ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/lib/python3.12/copy.py", line 143, in deepcopy
+    y = copier(memo)
+        ^^^^^^^^^^^^
+  File "/home/ubuntu/projects/multi_mcp_rl/.venv/lib/python3.12/site-packages/torch/_tensor.py", line 136, in __deepcopy__
+    raise RuntimeError(
+RuntimeError: Only Tensors created explicitly by the user (graph leaves) support the deepcopy protocol at the moment.  If you were attempting to deepcopy a module, this may be because of a torch.nn.utils.weight_norm usage, see https://github.com/pytorch/pytorch/pull/103001
+
+ERROR:__main__:  ❌ Runtime error: Only Tensors created explicitly by the user (graph leaves) support the deepcopy protocol at the moment.  If you were attempting to deepcopy a module, this may be because of a torch.nn.utils.weight_norm usage, see https://github.com/pytorch/pytorch/pull/103001
+INFO:__main__:Profiling: seq_len=1024, batch=1, grad_accum=1
+INFO:__main__:  Loading model...
+INFO:core.qwen_policy:Loaded configuration from /tmp/grpo_memory_profile_yl2tp1fe/model_config.yaml
+INFO:core.qwen_policy:Loaded configuration from /tmp/grpo_memory_profile_yl2tp1fe/training_config.yaml
+INFO:core.qwen_policy:Loading model: Qwen/Qwen2.5-1.5B-Instruct
+INFO:accelerate.utils.modeling:We will use 90% of the memory on device 0 for storing the model, and 10% for the buffer to avoid OOM. You can set `max_memory` in to a higher value to use more memory (at your own risk).
+INFO:core.qwen_policy:LoRA applied: 18,464,768 trainable / 1,562,179,072 total parameters (1.18% trainable)
+INFO:core.qwen_policy:Model loaded successfully on cuda
+INFO:core.qwen_policy:Generation config setup complete with 5 stop tokens
+INFO:core.qwen_policy:QwenPolicy initialized successfully in LoRA mode
+INFO:__main__:  Creating reference policy...
+INFO:core.qwen_policy:Loaded configuration from /tmp/grpo_memory_profile_yl2tp1fe/model_config.yaml
+INFO:core.qwen_policy:Loaded configuration from /tmp/grpo_memory_profile_yl2tp1fe/training_config.yaml
+INFO:core.qwen_policy:Loading model: Qwen/Qwen2.5-1.5B-Instruct
+INFO:accelerate.utils.modeling:We will use 90% of the memory on device 0 for storing the model, and 10% for the buffer to avoid OOM. You can set `max_memory` in to a higher value to use more memory (at your own risk).
+INFO:core.qwen_policy:LoRA applied: 18,464,768 trainable / 1,562,179,072 total parameters (1.18% trainable)
+INFO:core.qwen_policy:Model loaded successfully on cuda
+INFO:core.qwen_policy:Generation config setup complete with 5 stop tokens
+INFO:core.qwen_policy:QwenPolicy initialized successfully in LoRA mode
+INFO:__main__:  Creating trainer...
+INFO:core.grpo_trainer:Model has 730 total parameters
+INFO:core.grpo_trainer:Found 392 trainable parameters
+INFO:core.grpo_trainer:Using AdamW optimizer with lr=0.0002 for 392 parameters
+INFO:core.grpo_trainer:Setup cosine scheduler with 100 warmup steps
+INFO:core.grpo_trainer:GRPOTrainer initialized with 18,464,768 trainable parameters
+INFO:core.grpo_trainer:GRPO config: gamma=0.99, lambda=0.95, clip=0.2, kl_coef=0.1
+INFO:__main__:  Running 3 training steps...
+INFO:core.qwen_policy:Enabled gradients for 392 LoRA parameters
+WARNING:core.qwen_policy:Empty or invalid messages: []
+INFO:core.grpo_trainer:Starting train_step with 1 trajectories
+INFO:core.grpo_trainer:Trajectory 0: task_id=memory_test_000, length=2, rewards=[0.5, 1.0], states_count=2, actions_count=2
+INFO:core.grpo_trainer:Moving 1 trajectories to device cuda
+ERROR:core.grpo_trainer:❌ Error in train_step: RuntimeError: Only Tensors created explicitly by the user (graph leaves) support the deepcopy protocol at the moment.  If you were attempting to deepcopy a module, this may be because of a torch.nn.utils.weight_norm usage, see https://github.com/pytorch/pytorch/pull/103001
+ERROR:core.grpo_trainer:Train step error traceback:
+Traceback (most recent call last):
+  File "/home/ubuntu/projects/multi_mcp_rl/training/core/grpo_trainer.py", line 313, in train_step
+    trajectories = [traj.to_device(self.device) for traj in trajectories]
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/projects/multi_mcp_rl/training/core/grpo_trainer.py", line 81, in to_device
+    new_traj = copy.deepcopy(self)
+               ^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/lib/python3.12/copy.py", line 162, in deepcopy
+    y = _reconstruct(x, memo, *rv)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/lib/python3.12/copy.py", line 259, in _reconstruct
+    state = deepcopy(state, memo)
+            ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/lib/python3.12/copy.py", line 136, in deepcopy
+    y = copier(x, memo)
+        ^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/lib/python3.12/copy.py", line 221, in _deepcopy_dict
+    y[deepcopy(key, memo)] = deepcopy(value, memo)
+                             ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/lib/python3.12/copy.py", line 143, in deepcopy
+    y = copier(memo)
+        ^^^^^^^^^^^^
+  File "/home/ubuntu/projects/multi_mcp_rl/.venv/lib/python3.12/site-packages/torch/_tensor.py", line 136, in __deepcopy__
+    raise RuntimeError(
+RuntimeError: Only Tensors created explicitly by the user (graph leaves) support the deepcopy protocol at the moment.  If you were attempting to deepcopy a module, this may be because of a torch.nn.utils.weight_norm usage, see https://github.com/pytorch/pytorch/pull/103001
+
+ERROR:__main__:  ❌ Runtime error: Only Tensors created explicitly by the user (graph leaves) support the deepcopy protocol at the moment.  If you were attempting to deepcopy a module, this may be because of a torch.nn.utils.weight_norm usage, see https://github.com/pytorch/pytorch/pull/103001
+ERROR:__main__:No viable sequence lengths found!
+INFO:__main__:Cleaned up temporary directory: /tmp/grpo_memory_profile_yl2tp1fe
+INFO:__main__:Results saved to memory_profile_lora.json

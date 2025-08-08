@@ -1,0 +1,270 @@
+{
+  "test_suite": "GRPO Training Pipeline Comprehensive Tests",
+  "timestamp": "2025-08-08T20:39:48.621657",
+  "duration_seconds": 45.149471044540405,
+  "total_tests": 6,
+  "successful_tests": 5,
+  "failed_tests": 1,
+  "success_rate": 83.33333333333334,
+  "results_directory": "/home/ubuntu/projects/multi_mcp_rl/training/tests/test_results_20250808_203903",
+  "individual_results": {
+    "system_info": {
+      "success": true,
+      "system_info": {
+        "platform": "Linux-6.8.0-60-generic-x86_64-with-glibc2.35",
+        "python_version": "3.12.11",
+        "pytorch_version": "2.8.0+cu128",
+        "cuda_available": true,
+        "mps_available": false,
+        "cuda_device_count": 1,
+        "cuda_device_name": "NVIDIA A100-SXM4-40GB",
+        "total_memory_gb": 216.25842666625977,
+        "available_memory_gb": 211.62708282470703
+      },
+      "test_name": "system_info",
+      "timestamp": 1754685544.9235415,
+      "duration": 1.451359748840332
+    },
+    "existing_results": {
+      "success": true,
+      "existing_results": {
+        "memory_profile_lora": {
+          "file_path": "/home/ubuntu/projects/multi_mcp_rl/training/tests/memory_profile_lora.json",
+          "data": {
+            "metadata": {
+              "mode": "lora",
+              "device": "mps",
+              "timestamp": 1754150513.736831,
+              "total_system_memory_gb": 64.0,
+              "baseline_memory_gb": 0.0
+            },
+            "results": [
+              {
+                "sequence_length": 512,
+                "batch_size": 1,
+                "gradient_accumulation_steps": 1,
+                "mode": "lora",
+                "device": "mps",
+                "start_memory_gb": 0.0,
+                "success": false,
+                "error": "Unexpected error: No package metadata was found for bitsandbytes",
+                "peak_memory_gb": 0.0,
+                "model_memory_gb": 0.0,
+                "training_memory_gb": 0.0,
+                "memory_per_sample": 0.0,
+                "recommended_batch_size": 0
+              }
+            ],
+            "recommendations": {
+              "error": "No successful configurations found"
+            }
+          },
+          "modified_time": 1754684744.9646146
+        },
+        "mcp_integration_test_results": {
+          "file_path": "/home/ubuntu/projects/multi_mcp_rl/training/tests/mcp_integration_test_results.json",
+          "data": {
+            "test_suite": "MCP Integration Test",
+            "timestamp": 1754152252.3871229,
+            "tests": {
+              "server_availability": {
+                "success": true,
+                "details": {
+                  "python_execution_server.py": true,
+                  "fmp_limited_server.py": true,
+                  "polygon_limited_server.py": true,
+                  "slack_limited_server.py": true,
+                  "tavily_limited_server.py": true
+                }
+              },
+              "environment_import": {
+                "success": true
+              },
+              "python_execution_server": {
+                "success": true
+              },
+              "tool_manager": {
+                "success": true
+              },
+              "training_integration": {
+                "success": true
+              }
+            },
+            "summary": {
+              "duration_seconds": 1.8014721870422363,
+              "total_tests": 5,
+              "successful_tests": 5,
+              "success_rate": 100.0,
+              "overall_success": true
+            }
+          },
+          "modified_time": 1754684744.9646146
+        },
+        "quick_memory_test_results": {
+          "file_path": "/home/ubuntu/projects/multi_mcp_rl/training/tests/quick_memory_test_results.json",
+          "data": {
+            "test_suite": "Quick Memory Test",
+            "timestamp": 1754151262.149856,
+            "system_info": {
+              "platform": "macOS-14.3-arm64-arm-64bit",
+              "python_version": "3.12.0",
+              "pytorch_version": "2.7.1",
+              "device_info": {
+                "cuda": {
+                  "available": false
+                },
+                "mps": {
+                  "available": true,
+                  "device_name": "Apple Silicon GPU"
+                }
+              },
+              "memory": {
+                "total_gb": 64.0,
+                "available_gb": 15.619033813476562,
+                "used_percent": 75.6
+              }
+            },
+            "tests": {
+              "memory_monitoring": {
+                "device": "mps",
+                "initial_memory_gb": 0.0,
+                "peak_memory_gb": 0.00018715858459472656,
+                "final_memory_gb": 3.743171691894531e-05,
+                "memory_allocated_gb": 0.00018715858459472656,
+                "memory_freed_gb": 0.00014972686767578125,
+                "success": true
+              },
+              "configuration": {
+                "config_serialization": true,
+                "config_file_size": 156,
+                "success": true
+              },
+              "device_detection": {
+                "success": true,
+                "device": "mps",
+                "tensor_device": "mps:0",
+                "device_match": false
+              }
+            },
+            "summary": {
+              "duration_seconds": 0.0773618221282959,
+              "total_tests": 3,
+              "successful_tests": 3,
+              "success_rate": 100.0,
+              "overall_success": true
+            }
+          },
+          "modified_time": 1754684744.9646146
+        }
+      },
+      "files_found": 3,
+      "test_name": "existing_results",
+      "timestamp": 1754685544.9247005,
+      "duration": 1.4525187015533447
+    },
+    "file_structure_validation": {
+      "success": true,
+      "return_code": 0,
+      "stdout": "\ud83d\udd25 GRPO Training Structure Validation\n==================================================\n\ud83d\udd0d Validating file structure...\n  \u2705 core/__init__.py\n  \u2705 core/qwen_policy.py\n  \u2705 core/grpo_trainer.py\n  \u2705 data/__init__.py\n  \u2705 data/data_loader.py\n  \u2705 data/trajectory_collector.py\n  \u2705 configs/model_config.yaml\n  \u2705 configs/training_config.yaml\n  \u2705 configs/grpo_config.yaml\n  \u2705 configs/accelerate_config.yaml\n  \u2705 configs/deepspeed_config.json\n  \u2705 scripts/__init__.py\n  \u2705 scripts/train_grpo.py\n  \u2705 tests/smoke_test.py\n  \u2705 tests/memory_profile.py\n\nFile structure validation: 15/15 files found\n\u2705 All expected files present\n\n\ud83d\udd0d Validating imports...\n  \u2705 core.qwen_policy: all classes available\n  \u2705 core.grpo_trainer: all classes available\n  \u2705 data.data_loader: all classes available\n  \u2705 data.trajectory_collector: all classes available\n\nImport validation: 4/4 modules imported successfully\n\u2705 All modules imported successfully\n\n\ud83d\udd0d Validating configuration files...\n  \u2705 configs/model_config.yaml: valid yaml\n  \u2705 configs/training_config.yaml: valid yaml\n  \u2705 configs/grpo_config.yaml: valid yaml\n  \u2705 configs/accelerate_config.yaml: valid yaml\n  \u2705 configs/deepspeed_config.json: valid json\n\nConfiguration validation: 5/5 files valid\n\u2705 All configuration files valid\n\n\ud83d\udd0d Validating component instantiation...\n  \u2705 LRUCache instantiated and working\n  \u2705 CurriculumSampler instantiated and working\n  \u2705 TaskBatcher instantiated and working\n  \u2705 Trajectory instantiated and working\n  \u2705 EpisodeResult instantiated and working\n\n\u2705 All components can be instantiated\n\n\ud83d\udd0d Validating training script...\n  \u2705 train_grpo.py is syntactically valid\n\n============================================================\nVALIDATION SUMMARY\n============================================================\n  File Structure: \u2705 PASS\n  Module Imports: \u2705 PASS\n  Configuration Files: \u2705 PASS\n  Component Instantiation: \u2705 PASS\n  Training Script: \u2705 PASS\n\nOverall: 5/5 validations passed\n\n\ud83c\udf89 ALL VALIDATIONS PASSED!\n\u2705 GRPO training structure is complete and ready for use\n",
+      "stderr": "WARNING:mcp_tool_environment:Environment registration failed: An environment with name `mcp_tool_env` is already registered (id=`mcp_tool_env`). Environment names must be unique.\nINFO:data.data_loader:CurriculumSampler initialized: {'easy': 0.3, 'medium': 0.5, 'hard': 0.2} -> {'easy': 0.1, 'medium': 0.4, 'hard': 0.5}\nINFO:data.data_loader:TaskBatcher initialized: target_turns=64, max_batch=16\n",
+      "command": "/home/ubuntu/projects/multi_mcp_rl/.venv/bin/python /home/ubuntu/projects/multi_mcp_rl/training/tests/validate_structure.py",
+      "validation_summary": "All validations passed",
+      "components_validated": [
+        "File Structure",
+        "Module Imports",
+        "Configuration Files",
+        "Component Instantiation",
+        "Training Script"
+      ],
+      "test_name": "file_structure_validation",
+      "timestamp": 1754685550.207424,
+      "duration": 6.73524284362793
+    },
+    "minimal_components": {
+      "success": true,
+      "return_code": 0,
+      "stdout": "\n============================================================\nMINIMAL TEST RESULTS\n============================================================\n  Imports: \u2705 PASS\n  Data Components: \u2705 PASS\n  Trajectory Components: \u2705 PASS\n  Configuration Handling: \u2705 PASS\n  Device Detection: \u2705 PASS\n  Memory Monitoring: \u2705 PASS\n\nSummary: 6/6 tests passed\n\ud83c\udf89 ALL TESTS PASSED!\n",
+      "stderr": "INFO:__main__:\ud83d\udd25 Running minimal GRPO component tests...\nINFO:__main__:\n--- Testing Imports ---\nINFO:__main__:Testing imports...\nINFO:environments.mcp_tool_environment:\u2705 MCPToolEnvironment registered with SkyRL\nINFO:__main__:\u2705 QwenPolicy imported successfully\nINFO:__main__:\u2705 GRPOTrainer and Trajectory imported successfully\nINFO:__main__:\u2705 Data loader components imported successfully\nWARNING:mcp_tool_environment:Environment registration failed: An environment with name `mcp_tool_env` is already registered (id=`mcp_tool_env`). Environment names must be unique.\nINFO:__main__:\u2705 Trajectory collector imported successfully\nINFO:__main__:\n--- Testing Data Components ---\nINFO:__main__:Testing data components...\nINFO:__main__:\u2705 LRU Cache working correctly\nINFO:data.data_loader:CurriculumSampler initialized: {'easy': 0.3, 'medium': 0.5, 'hard': 0.2} -> {'easy': 0.1, 'medium': 0.4, 'hard': 0.5}\nINFO:__main__:\u2705 Curriculum Sampler working correctly\nINFO:data.data_loader:TaskBatcher initialized: target_turns=16, max_batch=4\nINFO:__main__:\u2705 Task Batcher working correctly\nINFO:__main__:\n--- Testing Trajectory Components ---\nINFO:__main__:Testing trajectory components...\nINFO:__main__:\u2705 Trajectory creation working correctly\nINFO:__main__:\u2705 EpisodeResult working correctly\nINFO:__main__:\n--- Testing Configuration Handling ---\nINFO:__main__:Testing configuration handling...\nINFO:__main__:\u2705 Configuration handling working correctly\nINFO:__main__:\n--- Testing Device Detection ---\nINFO:__main__:Testing device detection...\nINFO:__main__:\u2705 CUDA available: cuda\nINFO:__main__:\u2705 Device detection and tensor operations working correctly\nINFO:__main__:\n--- Testing Memory Monitoring ---\nINFO:__main__:Testing memory monitoring...\nINFO:__main__:\u2705 Memory monitoring working: 0.92GB -> 0.93GB\n",
+      "command": "/home/ubuntu/projects/multi_mcp_rl/.venv/bin/python /home/ubuntu/projects/multi_mcp_rl/training/tests/minimal_test.py",
+      "test_summary": "All minimal tests passed",
+      "components_tested": [
+        "Imports",
+        "Data Components",
+        "Trajectory Components",
+        "Configuration Handling",
+        "Device Detection",
+        "Memory Monitoring"
+      ],
+      "test_name": "minimal_components",
+      "timestamp": 1754685555.7151954,
+      "duration": 12.243013858795166
+    },
+    "memory_profiling_lora": {
+      "success": true,
+      "return_code": 0,
+      "stdout": "\ud83d\udd0d GRPO Memory Profiler\nMode: lora\nSequence lengths: [512, 1024, 2048]\nMax batch size: 8\nMax gradient accumulation: 16\n--------------------------------------------------\n\u26a1 Quick mode enabled - testing fewer configurations\n\n================================================================================\nMEMORY PROFILING RESULTS\n================================================================================\nMode: lora\nDevice: cuda\nTotal System Memory: 216.3 GB\nBaseline Memory: 0.00 GB\n\nConfigurations Tested: 2\nSuccessful: 0\nFailed: 2\n\n\u274c FAILED CONFIGURATIONS: 2\n  SeqLen=512, Batch=1: Runtime error: Only Tensors created explicitly by \n  SeqLen=1024, Batch=1: Runtime error: Only Tensors created explicitly by \n================================================================================\n\n\u2705 Memory profiling completed!\n\ud83d\udcc4 Results saved to: memory_profile_lora.json\n",
+      "stderr": "INFO:__main__:MemoryProfiler initialized: mode=lora, device=cuda\nINFO:__main__:Baseline memory usage: 0.00 GB\nINFO:__main__:Total system memory: 216.3 GB\nINFO:__main__:Starting comprehensive memory profiling...\nINFO:__main__:Using temporary directory: /tmp/grpo_memory_profile_yl2tp1fe\nINFO:__main__:Phase 1: Sequence length sweep\nINFO:__main__:Running sequence length sweep: lengths=[512, 1024], batch=1, grad_accum=1\nINFO:__main__:Profiling: seq_len=512, batch=1, grad_accum=1\nINFO:__main__:  Loading model...\nINFO:core.qwen_policy:Loaded configuration from /tmp/grpo_memory_profile_yl2tp1fe/model_config.yaml\nINFO:core.qwen_policy:Loaded configuration from /tmp/grpo_memory_profile_yl2tp1fe/training_config.yaml\nINFO:core.qwen_policy:Loading model: Qwen/Qwen2.5-1.5B-Instruct\nINFO:accelerate.utils.modeling:We will use 90% of the memory on device 0 for storing the model, and 10% for the buffer to avoid OOM. You can set `max_memory` in to a higher value to use more memory (at your own risk).\nINFO:core.qwen_policy:LoRA applied: 18,464,768 trainable / 1,562,179,072 total parameters (1.18% trainable)\nINFO:core.qwen_policy:Model loaded successfully on cuda\nINFO:core.qwen_policy:Generation config setup complete with 5 stop tokens\nINFO:core.qwen_policy:QwenPolicy initialized successfully in LoRA mode\nINFO:__main__:  Creating reference policy...\nINFO:core.qwen_policy:Loaded configuration from /tmp/grpo_memory_profile_yl2tp1fe/model_config.yaml\nINFO:core.qwen_policy:Loaded configuration from /tmp/grpo_memory_profile_yl2tp1fe/training_config.yaml\nINFO:core.qwen_policy:Loading model: Qwen/Qwen2.5-1.5B-Instruct\nINFO:accelerate.utils.modeling:We will use 90% of the memory on device 0 for storing the model, and 10% for the buffer to avoid OOM. You can set `max_memory` in to a higher value to use more memory (at your own risk).\nINFO:core.qwen_policy:LoRA applied: 18,464,768 trainable / 1,562,179,072 total parameters (1.18% trainable)\nINFO:core.qwen_policy:Model loaded successfully on cuda\nINFO:core.qwen_policy:Generation config setup complete with 5 stop tokens\nINFO:core.qwen_policy:QwenPolicy initialized successfully in LoRA mode\nINFO:__main__:  Creating trainer...\nINFO:core.grpo_trainer:Model has 730 total parameters\nINFO:core.grpo_trainer:Found 392 trainable parameters\nINFO:core.grpo_trainer:Using AdamW optimizer with lr=0.0002 for 392 parameters\nINFO:core.grpo_trainer:Setup cosine scheduler with 100 warmup steps\nINFO:core.grpo_trainer:GRPOTrainer initialized with 18,464,768 trainable parameters\nINFO:core.grpo_trainer:GRPO config: gamma=0.99, lambda=0.95, clip=0.2, kl_coef=0.1\nINFO:__main__:  Running 3 training steps...\nINFO:core.qwen_policy:Enabled gradients for 392 LoRA parameters\nWARNING:core.qwen_policy:Empty or invalid messages: []\nINFO:core.grpo_trainer:Starting train_step with 1 trajectories\nINFO:core.grpo_trainer:Trajectory 0: task_id=memory_test_000, length=2, rewards=[0.5, 1.0], states_count=2, actions_count=2\nINFO:core.grpo_trainer:Moving 1 trajectories to device cuda\nERROR:core.grpo_trainer:\u274c Error in train_step: RuntimeError: Only Tensors created explicitly by the user (graph leaves) support the deepcopy protocol at the moment.  If you were attempting to deepcopy a module, this may be because of a torch.nn.utils.weight_norm usage, see https://github.com/pytorch/pytorch/pull/103001\nERROR:core.grpo_trainer:Train step error traceback:\nTraceback (most recent call last):\n  File \"/home/ubuntu/projects/multi_mcp_rl/training/core/grpo_trainer.py\", line 313, in train_step\n    trajectories = [traj.to_device(self.device) for traj in trajectories]\n                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/ubuntu/projects/multi_mcp_rl/training/core/grpo_trainer.py\", line 81, in to_device\n    new_traj = copy.deepcopy(self)\n               ^^^^^^^^^^^^^^^^^^^\n  File \"/home/ubuntu/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/lib/python3.12/copy.py\", line 162, in deepcopy\n    y = _reconstruct(x, memo, *rv)\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/ubuntu/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/lib/python3.12/copy.py\", line 259, in _reconstruct\n    state = deepcopy(state, memo)\n            ^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/ubuntu/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/lib/python3.12/copy.py\", line 136, in deepcopy\n    y = copier(x, memo)\n        ^^^^^^^^^^^^^^^\n  File \"/home/ubuntu/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/lib/python3.12/copy.py\", line 221, in _deepcopy_dict\n    y[deepcopy(key, memo)] = deepcopy(value, memo)\n                             ^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/ubuntu/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/lib/python3.12/copy.py\", line 143, in deepcopy\n    y = copier(memo)\n        ^^^^^^^^^^^^\n  File \"/home/ubuntu/projects/multi_mcp_rl/.venv/lib/python3.12/site-packages/torch/_tensor.py\", line 136, in __deepcopy__\n    raise RuntimeError(\nRuntimeError: Only Tensors created explicitly by the user (graph leaves) support the deepcopy protocol at the moment.  If you were attempting to deepcopy a module, this may be because of a torch.nn.utils.weight_norm usage, see https://github.com/pytorch/pytorch/pull/103001\n\nERROR:__main__:  \u274c Runtime error: Only Tensors created explicitly by the user (graph leaves) support the deepcopy protocol at the moment.  If you were attempting to deepcopy a module, this may be because of a torch.nn.utils.weight_norm usage, see https://github.com/pytorch/pytorch/pull/103001\nINFO:__main__:Profiling: seq_len=1024, batch=1, grad_accum=1\nINFO:__main__:  Loading model...\nINFO:core.qwen_policy:Loaded configuration from /tmp/grpo_memory_profile_yl2tp1fe/model_config.yaml\nINFO:core.qwen_policy:Loaded configuration from /tmp/grpo_memory_profile_yl2tp1fe/training_config.yaml\nINFO:core.qwen_policy:Loading model: Qwen/Qwen2.5-1.5B-Instruct\nINFO:accelerate.utils.modeling:We will use 90% of the memory on device 0 for storing the model, and 10% for the buffer to avoid OOM. You can set `max_memory` in to a higher value to use more memory (at your own risk).\nINFO:core.qwen_policy:LoRA applied: 18,464,768 trainable / 1,562,179,072 total parameters (1.18% trainable)\nINFO:core.qwen_policy:Model loaded successfully on cuda\nINFO:core.qwen_policy:Generation config setup complete with 5 stop tokens\nINFO:core.qwen_policy:QwenPolicy initialized successfully in LoRA mode\nINFO:__main__:  Creating reference policy...\nINFO:core.qwen_policy:Loaded configuration from /tmp/grpo_memory_profile_yl2tp1fe/model_config.yaml\nINFO:core.qwen_policy:Loaded configuration from /tmp/grpo_memory_profile_yl2tp1fe/training_config.yaml\nINFO:core.qwen_policy:Loading model: Qwen/Qwen2.5-1.5B-Instruct\nINFO:accelerate.utils.modeling:We will use 90% of the memory on device 0 for storing the model, and 10% for the buffer to avoid OOM. You can set `max_memory` in to a higher value to use more memory (at your own risk).\nINFO:core.qwen_policy:LoRA applied: 18,464,768 trainable / 1,562,179,072 total parameters (1.18% trainable)\nINFO:core.qwen_policy:Model loaded successfully on cuda\nINFO:core.qwen_policy:Generation config setup complete with 5 stop tokens\nINFO:core.qwen_policy:QwenPolicy initialized successfully in LoRA mode\nINFO:__main__:  Creating trainer...\nINFO:core.grpo_trainer:Model has 730 total parameters\nINFO:core.grpo_trainer:Found 392 trainable parameters\nINFO:core.grpo_trainer:Using AdamW optimizer with lr=0.0002 for 392 parameters\nINFO:core.grpo_trainer:Setup cosine scheduler with 100 warmup steps\nINFO:core.grpo_trainer:GRPOTrainer initialized with 18,464,768 trainable parameters\nINFO:core.grpo_trainer:GRPO config: gamma=0.99, lambda=0.95, clip=0.2, kl_coef=0.1\nINFO:__main__:  Running 3 training steps...\nINFO:core.qwen_policy:Enabled gradients for 392 LoRA parameters\nWARNING:core.qwen_policy:Empty or invalid messages: []\nINFO:core.grpo_trainer:Starting train_step with 1 trajectories\nINFO:core.grpo_trainer:Trajectory 0: task_id=memory_test_000, length=2, rewards=[0.5, 1.0], states_count=2, actions_count=2\nINFO:core.grpo_trainer:Moving 1 trajectories to device cuda\nERROR:core.grpo_trainer:\u274c Error in train_step: RuntimeError: Only Tensors created explicitly by the user (graph leaves) support the deepcopy protocol at the moment.  If you were attempting to deepcopy a module, this may be because of a torch.nn.utils.weight_norm usage, see https://github.com/pytorch/pytorch/pull/103001\nERROR:core.grpo_trainer:Train step error traceback:\nTraceback (most recent call last):\n  File \"/home/ubuntu/projects/multi_mcp_rl/training/core/grpo_trainer.py\", line 313, in train_step\n    trajectories = [traj.to_device(self.device) for traj in trajectories]\n                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/ubuntu/projects/multi_mcp_rl/training/core/grpo_trainer.py\", line 81, in to_device\n    new_traj = copy.deepcopy(self)\n               ^^^^^^^^^^^^^^^^^^^\n  File \"/home/ubuntu/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/lib/python3.12/copy.py\", line 162, in deepcopy\n    y = _reconstruct(x, memo, *rv)\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/ubuntu/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/lib/python3.12/copy.py\", line 259, in _reconstruct\n    state = deepcopy(state, memo)\n            ^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/ubuntu/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/lib/python3.12/copy.py\", line 136, in deepcopy\n    y = copier(x, memo)\n        ^^^^^^^^^^^^^^^\n  File \"/home/ubuntu/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/lib/python3.12/copy.py\", line 221, in _deepcopy_dict\n    y[deepcopy(key, memo)] = deepcopy(value, memo)\n                             ^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/ubuntu/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/lib/python3.12/copy.py\", line 143, in deepcopy\n    y = copier(memo)\n        ^^^^^^^^^^^^\n  File \"/home/ubuntu/projects/multi_mcp_rl/.venv/lib/python3.12/site-packages/torch/_tensor.py\", line 136, in __deepcopy__\n    raise RuntimeError(\nRuntimeError: Only Tensors created explicitly by the user (graph leaves) support the deepcopy protocol at the moment.  If you were attempting to deepcopy a module, this may be because of a torch.nn.utils.weight_norm usage, see https://github.com/pytorch/pytorch/pull/103001\n\nERROR:__main__:  \u274c Runtime error: Only Tensors created explicitly by the user (graph leaves) support the deepcopy protocol at the moment.  If you were attempting to deepcopy a module, this may be because of a torch.nn.utils.weight_norm usage, see https://github.com/pytorch/pytorch/pull/103001\nERROR:__main__:No viable sequence lengths found!\nINFO:__main__:Cleaned up temporary directory: /tmp/grpo_memory_profile_yl2tp1fe\nINFO:__main__:Results saved to memory_profile_lora.json\n",
+      "command": "/home/ubuntu/projects/multi_mcp_rl/.venv/bin/python /home/ubuntu/projects/multi_mcp_rl/training/tests/memory_profile.py --mode lora --quick",
+      "memory_profile_data": {
+        "metadata": {
+          "mode": "lora",
+          "device": "cuda",
+          "timestamp": 1754685573.6993573,
+          "total_system_memory_gb": 216.25842666625977,
+          "baseline_memory_gb": 0.0
+        },
+        "results": [
+          {
+            "sequence_length": 512,
+            "batch_size": 1,
+            "gradient_accumulation_steps": 1,
+            "mode": "lora",
+            "device": "cuda",
+            "start_memory_gb": 0.0,
+            "success": false,
+            "error": "Runtime error: Only Tensors created explicitly by the user (graph leaves) support the deepcopy protocol at the moment.  If you were attempting to deepcopy a module, this may be because of a torch.nn.utils.weight_norm usage, see https://github.com/pytorch/pytorch/pull/103001",
+            "peak_memory_gb": 0.0,
+            "model_memory_gb": 5.826162815093994,
+            "training_memory_gb": 0.0,
+            "memory_per_sample": 0.0,
+            "recommended_batch_size": 0
+          },
+          {
+            "sequence_length": 1024,
+            "batch_size": 1,
+            "gradient_accumulation_steps": 1,
+            "mode": "lora",
+            "device": "cuda",
+            "start_memory_gb": 0.008056640625,
+            "success": false,
+            "error": "Runtime error: Only Tensors created explicitly by the user (graph leaves) support the deepcopy protocol at the moment.  If you were attempting to deepcopy a module, this may be because of a torch.nn.utils.weight_norm usage, see https://github.com/pytorch/pytorch/pull/103001",
+            "peak_memory_gb": 0.0,
+            "model_memory_gb": 5.824697971343994,
+            "training_memory_gb": 0.0,
+            "memory_per_sample": 0.0,
+            "recommended_batch_size": 0
+          }
+        ],
+        "recommendations": {
+          "error": "No successful configurations found"
+        }
+      },
+      "successful_configurations": 0,
+      "total_configurations_tested": 2,
+      "test_name": "memory_profiling_lora",
+      "timestamp": 1754685574.789477,
+      "duration": 31.31729555130005
+    },
+    "smoke_test_lora": {
+      "success": false,
+      "return_code": 1,
+      "stdout": "\ud83d\udd25 GRPO Training Pipeline Smoke Test\nMode: lora\nSkip Model Tests: True\nTarget: Complete in under 2 minutes\n--------------------------------------------------\n\n============================================================\nSMOKE TEST RESULTS\n============================================================\nMode: lora\nDevice: cuda\nElapsed Time: 8.5 seconds\nSkip Model Tests: True\n\nTest Results:\n  policy_initialization: \u2705 PASS\n  data_loading: \u2705 PASS\n  trajectory_collection: \u2705 PASS\n  grpo_training: \u274c FAIL\n\nSummary: 3/4 tests passed\n\u26a0\ufe0f  Some tests failed. Check logs for details.\n============================================================\n\n\u274c Smoke test failed!\n",
+      "stderr": "INFO:__main__:SmokeTest initialized: mode=lora, device=cuda\nINFO:__main__:macOS Unified Memory Available: 209.9 GB\nINFO:__main__:Starting comprehensive smoke tests...\nINFO:__main__:Using temporary directory: /tmp/grpo_smoke_test_wlgoofif\nINFO:__main__:GPU Memory: 0.00GB allocated, 0.00GB cached\nINFO:__main__:System Memory: 0.73GB RSS\nINFO:__main__:Testing policy initialization...\nINFO:core.qwen_policy:Loaded configuration from /tmp/grpo_smoke_test_wlgoofif/model_config.yaml\nINFO:core.qwen_policy:Loaded configuration from /tmp/grpo_smoke_test_wlgoofif/training_config.yaml\nINFO:core.qwen_policy:Loading model: Qwen/Qwen2.5-1.5B-Instruct\nINFO:accelerate.utils.modeling:We will use 90% of the memory on device 0 for storing the model, and 10% for the buffer to avoid OOM. You can set `max_memory` in to a higher value to use more memory (at your own risk).\nINFO:core.qwen_policy:LoRA applied: 1,777,664 trainable / 1,545,491,968 total parameters (0.12% trainable)\nINFO:core.qwen_policy:Model loaded successfully on cuda\nINFO:core.qwen_policy:Generation config setup complete with 5 stop tokens\nINFO:core.qwen_policy:QwenPolicy initialized successfully in LoRA mode\nINFO:__main__:Policy initialized: 1,777,664 trainable parameters\nINFO:core.qwen_policy:Loaded configuration from /tmp/grpo_smoke_test_wlgoofif/model_config.yaml\nINFO:core.qwen_policy:Loaded configuration from /tmp/grpo_smoke_test_wlgoofif/training_config.yaml\nINFO:core.qwen_policy:Loading model: Qwen/Qwen2.5-1.5B-Instruct\nINFO:accelerate.utils.modeling:We will use 90% of the memory on device 0 for storing the model, and 10% for the buffer to avoid OOM. You can set `max_memory` in to a higher value to use more memory (at your own risk).\nINFO:core.qwen_policy:LoRA applied: 1,777,664 trainable / 1,545,491,968 total parameters (0.12% trainable)\nINFO:core.qwen_policy:Model loaded successfully on cuda\nINFO:core.qwen_policy:Generation config setup complete with 5 stop tokens\nINFO:core.qwen_policy:QwenPolicy initialized successfully in LoRA mode\nINFO:__main__:GPU Memory: 5.76GB allocated, 5.92GB cached\nINFO:__main__:System Memory: 0.96GB RSS\nINFO:__main__:Testing data loading...\nINFO:data.data_loader:Building task index...\nINFO:data.data_loader:Task index built: 5 tasks after sharding\nINFO:data.data_loader:Complexity distribution: {'easy': 2, 'medium': 2, 'hard': 1}\nINFO:data.data_loader:StreamingDataset initialized: /tmp/grpo_smoke_test_wlgoofif/test_data.json (json), shard 0/1, 5 tasks\nINFO:data.data_loader:CurriculumSampler initialized: {'easy': 0.3, 'medium': 0.5, 'hard': 0.2} -> {'easy': 0.1, 'medium': 0.4, 'hard': 0.5}\nINFO:data.data_loader:TaskBatcher initialized: target_turns=8, max_batch=3\nINFO:__main__:Data loading test passed: 5 tasks, 1 in batch\nINFO:__main__:GPU Memory: 5.76GB allocated, 5.92GB cached\nINFO:__main__:System Memory: 0.96GB RSS\nINFO:__main__:Testing trajectory collection...\nINFO:__main__:Trajectory collection test passed: 2 trajectories\nINFO:__main__:GPU Memory: 5.76GB allocated, 5.92GB cached\nINFO:__main__:System Memory: 0.96GB RSS\nINFO:__main__:Testing GRPO training...\nINFO:core.qwen_policy:Loaded configuration from /tmp/grpo_smoke_test_wlgoofif/model_config.yaml\nINFO:core.qwen_policy:Loaded configuration from /tmp/grpo_smoke_test_wlgoofif/training_config.yaml\nINFO:core.qwen_policy:Loading model: Qwen/Qwen2.5-1.5B-Instruct\nINFO:core.qwen_policy:Configured 4-bit quantization for LoRA training\nINFO:core.qwen_policy:LoRA applied: 1,777,664 trainable / 890,394,112 total parameters (0.20% trainable)\nINFO:core.qwen_policy:Model loaded successfully on cuda\nINFO:core.qwen_policy:Generation config setup complete with 5 stop tokens\nINFO:core.qwen_policy:QwenPolicy initialized successfully in LoRA mode\nINFO:core.grpo_trainer:Model has 506 total parameters\nINFO:core.grpo_trainer:Found 168 trainable parameters\nINFO:core.grpo_trainer:Using AdamW optimizer with lr=0.0001 for 168 parameters\nINFO:core.grpo_trainer:Setup linear scheduler with 1 warmup steps\nINFO:core.grpo_trainer:GRPOTrainer initialized with 1,777,664 trainable parameters\nINFO:core.grpo_trainer:GRPO config: gamma=0.99, lambda=0.95, clip=0.2, kl_coef=0.1\nINFO:core.qwen_policy:Enabled gradients for 168 LoRA parameters\nINFO:__main__:Running training step 1/3...\nINFO:core.grpo_trainer:Starting train_step with 2 trajectories\nINFO:core.grpo_trainer:Trajectory 0: task_id=smoke_test_001, length=2, rewards=[0.5, 1.0], states_count=2, actions_count=2\nINFO:core.grpo_trainer:Trajectory 1: task_id=smoke_test_002, length=2, rewards=[0.5, 1.0], states_count=2, actions_count=2\nINFO:core.grpo_trainer:Moving 2 trajectories to device cuda\nERROR:core.grpo_trainer:\u274c Error in train_step: RuntimeError: Only Tensors created explicitly by the user (graph leaves) support the deepcopy protocol at the moment.  If you were attempting to deepcopy a module, this may be because of a torch.nn.utils.weight_norm usage, see https://github.com/pytorch/pytorch/pull/103001\nERROR:core.grpo_trainer:Train step error traceback:\nTraceback (most recent call last):\n  File \"/home/ubuntu/projects/multi_mcp_rl/training/core/grpo_trainer.py\", line 313, in train_step\n    trajectories = [traj.to_device(self.device) for traj in trajectories]\n                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/ubuntu/projects/multi_mcp_rl/training/core/grpo_trainer.py\", line 81, in to_device\n    new_traj = copy.deepcopy(self)\n               ^^^^^^^^^^^^^^^^^^^\n  File \"/home/ubuntu/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/lib/python3.12/copy.py\", line 162, in deepcopy\n    y = _reconstruct(x, memo, *rv)\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/ubuntu/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/lib/python3.12/copy.py\", line 259, in _reconstruct\n    state = deepcopy(state, memo)\n            ^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/ubuntu/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/lib/python3.12/copy.py\", line 136, in deepcopy\n    y = copier(x, memo)\n        ^^^^^^^^^^^^^^^\n  File \"/home/ubuntu/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/lib/python3.12/copy.py\", line 221, in _deepcopy_dict\n    y[deepcopy(key, memo)] = deepcopy(value, memo)\n                             ^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/ubuntu/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/lib/python3.12/copy.py\", line 143, in deepcopy\n    y = copier(memo)\n        ^^^^^^^^^^^^\n  File \"/home/ubuntu/projects/multi_mcp_rl/.venv/lib/python3.12/site-packages/torch/_tensor.py\", line 136, in __deepcopy__\n    raise RuntimeError(\nRuntimeError: Only Tensors created explicitly by the user (graph leaves) support the deepcopy protocol at the moment.  If you were attempting to deepcopy a module, this may be because of a torch.nn.utils.weight_norm usage, see https://github.com/pytorch/pytorch/pull/103001\n\nERROR:__main__:GRPO training failed: Only Tensors created explicitly by the user (graph leaves) support the deepcopy protocol at the moment.  If you were attempting to deepcopy a module, this may be because of a torch.nn.utils.weight_norm usage, see https://github.com/pytorch/pytorch/pull/103001\nERROR:__main__:Traceback (most recent call last):\n  File \"/home/ubuntu/projects/multi_mcp_rl/training/tests/smoke_test.py\", line 514, in test_grpo_training\n    metrics = trainer.train_step(trajectories)\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/ubuntu/projects/multi_mcp_rl/training/core/grpo_trainer.py\", line 313, in train_step\n    trajectories = [traj.to_device(self.device) for traj in trajectories]\n                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/ubuntu/projects/multi_mcp_rl/training/core/grpo_trainer.py\", line 81, in to_device\n    new_traj = copy.deepcopy(self)\n               ^^^^^^^^^^^^^^^^^^^\n  File \"/home/ubuntu/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/lib/python3.12/copy.py\", line 162, in deepcopy\n    y = _reconstruct(x, memo, *rv)\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/ubuntu/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/lib/python3.12/copy.py\", line 259, in _reconstruct\n    state = deepcopy(state, memo)\n            ^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/ubuntu/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/lib/python3.12/copy.py\", line 136, in deepcopy\n    y = copier(x, memo)\n        ^^^^^^^^^^^^^^^\n  File \"/home/ubuntu/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/lib/python3.12/copy.py\", line 221, in _deepcopy_dict\n    y[deepcopy(key, memo)] = deepcopy(value, memo)\n                             ^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/ubuntu/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/lib/python3.12/copy.py\", line 143, in deepcopy\n    y = copier(memo)\n        ^^^^^^^^^^^^\n  File \"/home/ubuntu/projects/multi_mcp_rl/.venv/lib/python3.12/site-packages/torch/_tensor.py\", line 136, in __deepcopy__\n    raise RuntimeError(\nRuntimeError: Only Tensors created explicitly by the user (graph leaves) support the deepcopy protocol at the moment.  If you were attempting to deepcopy a module, this may be because of a torch.nn.utils.weight_norm usage, see https://github.com/pytorch/pytorch/pull/103001\n\nERROR:__main__:GRPO training failed, skipping checkpoint test\nINFO:__main__:Cleaned up temporary directory: /tmp/grpo_smoke_test_wlgoofif\n",
+      "command": "/home/ubuntu/projects/multi_mcp_rl/.venv/bin/python /home/ubuntu/projects/multi_mcp_rl/training/tests/smoke_test.py --mode lora --skip_model_tests",
+      "smoke_test_summary": "Smoke test execution failed",
+      "test_name": "smoke_test_lora",
+      "timestamp": 1754685588.6207259,
+      "duration": 45.14854431152344
+    }
+  }
+}

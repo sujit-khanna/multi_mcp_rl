@@ -1,0 +1,36 @@
+INFO:__main__:🔥 Running minimal GRPO component tests...
+INFO:__main__:
+--- Testing Imports ---
+INFO:__main__:Testing imports...
+INFO:environments.mcp_tool_environment:✅ MCPToolEnvironment registered with SkyRL
+INFO:__main__:✅ QwenPolicy imported successfully
+INFO:__main__:✅ GRPOTrainer and Trajectory imported successfully
+INFO:__main__:✅ Data loader components imported successfully
+WARNING:mcp_tool_environment:Environment registration failed: An environment with name `mcp_tool_env` is already registered (id=`mcp_tool_env`). Environment names must be unique.
+INFO:__main__:✅ Trajectory collector imported successfully
+INFO:__main__:
+--- Testing Data Components ---
+INFO:__main__:Testing data components...
+INFO:__main__:✅ LRU Cache working correctly
+INFO:data.data_loader:CurriculumSampler initialized: {'easy': 0.3, 'medium': 0.5, 'hard': 0.2} -> {'easy': 0.1, 'medium': 0.4, 'hard': 0.5}
+INFO:__main__:✅ Curriculum Sampler working correctly
+INFO:data.data_loader:TaskBatcher initialized: target_turns=16, max_batch=4
+INFO:__main__:✅ Task Batcher working correctly
+INFO:__main__:
+--- Testing Trajectory Components ---
+INFO:__main__:Testing trajectory components...
+INFO:__main__:✅ Trajectory creation working correctly
+INFO:__main__:✅ EpisodeResult working correctly
+INFO:__main__:
+--- Testing Configuration Handling ---
+INFO:__main__:Testing configuration handling...
+INFO:__main__:✅ Configuration handling working correctly
+INFO:__main__:
+--- Testing Device Detection ---
+INFO:__main__:Testing device detection...
+INFO:__main__:✅ CUDA available: cuda
+INFO:__main__:✅ Device detection and tensor operations working correctly
+INFO:__main__:
+--- Testing Memory Monitoring ---
+INFO:__main__:Testing memory monitoring...
+INFO:__main__:✅ Memory monitoring working: 0.92GB -> 0.93GB

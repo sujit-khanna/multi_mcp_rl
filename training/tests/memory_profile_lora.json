@@ -1,9 +1,9 @@
 {
   "metadata": {
     "mode": "lora",
-    "device": "mps",
-    "timestamp": 1754150513.736831,
-    "total_system_memory_gb": 64.0,
+    "device": "cuda",
+    "timestamp": 1754685573.6993573,
+    "total_system_memory_gb": 216.25842666625977,
     "baseline_memory_gb": 0.0
   },
   "results": [
@@ -12,12 +12,27 @@
       "batch_size": 1,
       "gradient_accumulation_steps": 1,
       "mode": "lora",
-      "device": "mps",
+      "device": "cuda",
       "start_memory_gb": 0.0,
       "success": false,
-      "error": "Unexpected error: No package metadata was found for bitsandbytes",
+      "error": "Runtime error: Only Tensors created explicitly by the user (graph leaves) support the deepcopy protocol at the moment.  If you were attempting to deepcopy a module, this may be because of a torch.nn.utils.weight_norm usage, see https://github.com/pytorch/pytorch/pull/103001",
       "peak_memory_gb": 0.0,
-      "model_memory_gb": 0.0,
+      "model_memory_gb": 5.826162815093994,
+      "training_memory_gb": 0.0,
+      "memory_per_sample": 0.0,
+      "recommended_batch_size": 0
+    },
+    {
+      "sequence_length": 1024,
+      "batch_size": 1,
+      "gradient_accumulation_steps": 1,
+      "mode": "lora",
+      "device": "cuda",
+      "start_memory_gb": 0.008056640625,
+      "success": false,
+      "error": "Runtime error: Only Tensors created explicitly by the user (graph leaves) support the deepcopy protocol at the moment.  If you were attempting to deepcopy a module, this may be because of a torch.nn.utils.weight_norm usage, see https://github.com/pytorch/pytorch/pull/103001",
+      "peak_memory_gb": 0.0,
+      "model_memory_gb": 5.824697971343994,
       "training_memory_gb": 0.0,
       "memory_per_sample": 0.0,
       "recommended_batch_size": 0

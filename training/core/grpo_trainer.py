@@ -657,13 +657,21 @@ class GRPOTrainer:
         self.optimizer.zero_grad()
         total_loss.backward()
         
-        # Gradient clipping
+        # Gradient clipping and tracking
         if self.grpo_config.get("gradient_clipping_enabled", True):
             clip_value = self.grpo_config.get("gradient_clipping_value", 1.0)
-            torch.nn.utils.clip_grad_norm_(
+            self.grad_norm = torch.nn.utils.clip_grad_norm_(
                 self.policy.model.parameters(),
                 max_norm=clip_value
-            )
+            ).item()
+        else:
+            # Calculate gradient norm even if not clipping
+            total_norm = 0
+            for p in self.policy.model.parameters():
+                if p.grad is not None:
+                    param_norm = p.grad.data.norm(2)
+                    total_norm += param_norm.item() ** 2
+            self.grad_norm = total_norm ** 0.5
         
         # Optimizer step
         self.optimizer.step()
@@ -680,6 +688,7 @@ class GRPOTrainer:
             "avg_advantage": advantages.mean().item(),
             "std_advantage": advantages.std().item(),
             "kl_coef": kl_coef,
+            "grad_norm": self.grad_norm if hasattr(self, 'grad_norm') else 0,
         }
         
         if entropy_loss != 0:

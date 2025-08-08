@@ -430,13 +430,27 @@ class TrajectoryCollector:
                 log_prob = None
                 if self.collect_log_probs:
                     try:
+                        # Clear GPU cache before computing log probs to prevent OOM
+                        import torch
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                        
                         # Get log probability for this action
                         states = [conversation_history[:-2]]  # State before action
                         actions = [action]
-                        log_probs = self.policy.compute_log_probs(states, actions)
-                        log_prob = log_probs[0].item() if len(log_probs) > 0 else None
+                        
+                        # Compute without gradients to save memory
+                        with torch.no_grad():
+                            log_probs = self.policy.compute_log_probs(states, actions)
+                            log_prob = log_probs[0].item() if len(log_probs) > 0 else None
+                    except torch.cuda.OutOfMemoryError:
+                        logger.warning("CUDA OOM when computing log probabilities, using default value")
+                        log_prob = -1.0  # Default value for OOM case
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
                     except Exception as e:
                         logger.warning(f"Failed to compute log probabilities: {e}")
+                        log_prob = -1.0  # Default value for other errors
                 
                 # Create turn data
                 turn_data = {
