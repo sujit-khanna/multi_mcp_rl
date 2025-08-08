@@ -1,0 +1,99 @@
+# Model Configuration for GRPO Training
+# Base model and tokenizer configuration
+model_name: "Qwen/Qwen2.5-0.5B-Instruct"
+tokenizer_name: "Qwen/Qwen2.5-0.5B-Instruct"
+model_revision: "main"  # Use main branch by default
+trust_remote_code: true  # Required for Qwen models
+
+# Model architecture settings (Qwen2.5-0.5B specific)
+max_length: 1024          # Further reduced for MPS memory constraints
+context_length: 1024      # Context window size
+vocab_size: 151936        # Qwen2.5 vocabulary size
+hidden_size: 896          # Model hidden dimension for 0.5B
+num_attention_heads: 14   # Number of attention heads
+num_hidden_layers: 24     # Number of transformer layers for 0.5B
+
+# Tokenizer settings
+padding_side: "left"      # Required for batch generation
+truncation_side: "left"   # Keep most recent context
+add_special_tokens: true
+use_fast_tokenizer: true
+
+# Generation settings for inference/evaluation
+generation:
+  max_new_tokens: 1024    # Maximum tokens to generate
+  temperature: 0.7        # Sampling temperature
+  top_p: 0.9             # Nucleus sampling
+  top_k: 50              # Top-k sampling
+  do_sample: true        # Enable sampling
+  pad_token_id: 151643   # Qwen2.5 pad token
+  eos_token_id: 151645   # Qwen2.5 end token
+  repetition_penalty: 1.1 # Prevent repetition
+
+# Stop sequences for reasoning and tool calls
+stop_sequences:
+  - "</think>"           # End of reasoning
+  - "</tool_call>"       # End of tool call
+  - "<|im_end|>"        # Qwen chat template end
+  - "<|endoftext|>"     # Alternative end token
+
+# Special tokens for structured output
+special_tokens:
+  reasoning_start: "<think>"
+  reasoning_end: "</think>"
+  tool_call_start: "<tool_call>"
+  tool_call_end: "</tool_call>"
+  system_start: "<|im_start|>system"
+  user_start: "<|im_start|>user"
+  assistant_start: "<|im_start|>assistant"
+  im_end: "<|im_end|>"
+
+# LoRA Configuration (for development/testing)
+lora_mode:
+  enabled: false          # Set to true for LoRA training
+  r: 16                  # LoRA rank (higher = more parameters)
+  alpha: 32              # LoRA scaling factor (alpha/r = scaling)
+  target_modules:        # Modules to apply LoRA to
+    - "q_proj"           # Query projection
+    - "k_proj"           # Key projection  
+    - "v_proj"           # Value projection
+    - "o_proj"           # Output projection
+    - "gate_proj"        # Gate projection (MLP)
+    - "up_proj"          # Up projection (MLP)
+    - "down_proj"        # Down projection (MLP)
+  dropout: 0.1           # LoRA dropout rate
+  bias: "none"           # Bias handling ("none", "all", "lora_only")
+  task_type: "CAUSAL_LM" # Task type for PEFT
+  fan_in_fan_out: false  # LoRA fan in/out setting
+  init_lora_weights: true # Initialize LoRA weights
+
+# Full Fine-tuning Configuration (for production)
+full_finetune_mode:
+  enabled: true               # Set to false for LoRA mode
+  gradient_checkpointing: true # Save memory during backprop
+  use_flash_attention: true   # Use flash attention if available
+  bf16: true                 # Use bfloat16 precision
+  fp16: false                # Don't use fp16 (conflicts with bf16)
+  torch_compile: false       # Torch 2.0 compilation (experimental)
+  
+# Memory optimization settings
+memory_optimization:
+  low_cpu_mem_usage: true    # Reduce CPU memory usage during loading
+  device_map: null         # Disabled for MPS (manual placement)
+  torch_dtype: "float32"    # Changed to float32 for MPS compatibility
+  attn_implementation: null # Disabled for MPS compatibility
+  
+# Model loading optimization
+loading:
+  use_safetensors: true      # Use safetensors format
+  local_files_only: false    # Allow downloading from hub
+  cache_dir: null            # Use default cache directory
+  revision: "main"           # Model revision to use
+  
+# Quantization settings (for LoRA mode)
+quantization:
+  load_in_4bit: false        # Enable for LoRA mode to save memory
+  load_in_8bit: false        # Alternative quantization
+  bnb_4bit_compute_dtype: "bfloat16"  # Computation dtype for 4-bit
+  bnb_4bit_use_double_quant: true     # Double quantization
+  bnb_4bit_quant_type: "nf4"          # Quantization type

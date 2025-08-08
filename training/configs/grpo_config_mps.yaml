@@ -1,0 +1,113 @@
+# GRPO Algorithm Configuration - MPS Optimized
+algorithm: "grpo"
+algorithm_version: "1.0"
+
+# GRPO Core Parameters (reduced for MPS)
+group_size: 2  # Minimal group size
+kl_penalty_coef: 0.1
+target_kl_divergence: 0.01
+adaptive_kl_penalty: true
+kl_penalty_warmup_steps: 100
+
+# Generalized Advantage Estimation (GAE)
+gamma: 0.99
+gae_lambda: 0.95
+normalize_advantages: true
+normalize_rewards: true
+advantage_epsilon: 1e-8
+
+# Policy Gradient Settings
+clip_ratio: 0.2
+entropy_coef: 0.01
+value_loss_coef: 0.5
+
+# Reference Policy Management
+ref_policy_update_frequency: 5000
+ref_policy_ema_enabled: false
+ref_policy_ema_decay: 0.99
+
+# Reward Computation
+reward_shaping_enabled: true
+reward_normalization: "group"
+
+# Episode and Environment Settings (reduced for MPS)
+max_episode_length: 8  # Reduced from 15
+episode_timeout_penalty: -1.0
+early_termination_reward: 0.1
+
+# Rollout Collection Settings (MPS-optimized)
+rollout_parallel_envs: 1  # No parallelism for MPS
+rollout_batch_size: 2  # Minimal batch
+episodes_per_update: 1  # One at a time
+max_rollout_length: 8  # Match episode length
+rollout_timeout_seconds: 180  # 3 minutes
+
+# Training Stability
+gradient_clipping_enabled: true
+gradient_clipping_value: 1.0
+policy_loss_clipping: 10.0
+value_loss_clipping: 10.0
+
+# Trust Region Constraints
+max_kl_divergence: 0.02
+kl_early_stop: true
+
+# Optimizer Settings (MPS-specific)
+optimizer:
+  type: "adamw"  # Standard AdamW for MPS
+  learning_rate: 0.0002
+  adam_beta1: 0.9
+  adam_beta2: 0.999
+  adam_epsilon: 1e-8
+  weight_decay: 0.01
+  use_8bit: false  # Not supported on MPS
+
+# Learning Rate Schedule
+lr_scheduler:
+  type: "cosine"
+  warmup_steps: 100
+  min_lr_ratio: 0.1
+  cycle_length: 1000
+
+# Batch Processing (MPS limits)
+train_batch_size: 1
+gradient_accumulation_steps: 8
+max_grad_norm: 1.0
+
+# Evaluation Settings
+eval_interval: 100
+eval_episodes: 5
+use_deterministic_eval: true
+
+# Checkpointing
+checkpoint_interval: 200
+keep_last_n_checkpoints: 3
+save_optimizer_state: true
+save_scheduler_state: true
+
+# Early Stopping
+early_stopping:
+  enabled: true
+  patience: 5
+  min_delta: 0.001
+  metric: "eval_success_rate"
+  mode: "max"
+
+# Logging
+log_interval: 10
+log_trajectory_samples: 2
+log_gradients: false  # Disable for performance
+log_weights: false
+log_attention_weights: false
+
+# Memory Management (MPS-specific)
+clear_cache_frequency: 10  # Clear MPS cache frequently
+max_memory_gb: 8  # Limit memory usage
+enable_memory_profiling: false
+
+# MPS-specific optimizations
+mps_optimizations:
+  empty_cache_steps: 5
+  max_tensor_size_mb: 3500  # Stay under 4GB limit
+  force_fp32: true
+  disable_mixed_precision: true

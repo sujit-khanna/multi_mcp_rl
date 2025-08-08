@@ -1,0 +1,79 @@
+# GRPO Configuration for Qwen3-0.6B
+# Group Relative Policy Optimization settings
+
+# GRPO algorithm parameters
+gamma: 0.99  # Discount factor
+lambda: 0.95  # GAE lambda for advantage estimation
+kl_penalty: 0.1  # KL divergence penalty coefficient
+clip_range: 0.2  # PPO-style clipping range
+
+# Rollout settings
+rollout_batch_size: 4  # Number of tasks per rollout batch
+rollout_parallel_envs: 2  # Parallel environments for collection
+rollout_timeout_seconds: 180  # 3 minutes per batch
+max_episode_length: 10  # Shorter for 0.6B model
+retry_failed_episodes: true
+max_retries: 2
+
+# Group comparison settings
+group_size: 4  # Number of rollouts per task for comparison
+temperature_for_sampling: 1.0  # Temperature for diverse rollouts
+use_nucleus_sampling: true
+top_p: 0.95
+
+# Advantage computation
+advantage_type: "gae"  # Generalized Advantage Estimation
+normalize_advantages: true
+advantage_epsilon: 1e-8
+
+# Reference policy updates
+reference_update_interval: 5000  # Update reference every 5k steps
+reference_ema_decay: 0.99  # Exponential moving average
+
+# Reward shaping
+reward_shaping:
+  task_completion_weight: 0.4
+  reasoning_quality_weight: 0.3
+  tool_efficiency_weight: 0.2
+  turn_penalty_weight: 0.1
+  
+# Multi-turn specific settings
+multi_turn:
+  max_turns: 10
+  turn_penalty: -0.05  # Small penalty per turn
+  incomplete_episode_penalty: -1.0
+  success_bonus: 1.0
+  
+# Tool use rewards
+tool_rewards:
+  correct_tool_bonus: 0.2
+  incorrect_tool_penalty: -0.3
+  unnecessary_tool_penalty: -0.1
+  tool_error_penalty: -0.5
+  
+# Memory and performance
+trajectory_buffer_size: 1000
+clear_buffer_after_update: false
+use_trajectory_cache: true
+
+# Logging and debugging
+log_trajectory_samples: 5  # Log sample trajectories
+log_advantage_distribution: true
+save_trajectory_data: true
+
+# Entropy regularization
+entropy_coefficient: 0.01  # Encourage exploration
+entropy_decay: 0.999  # Decay per update
+min_entropy: 0.001
+
+# Value function settings
+value_loss_coefficient: 0.5
+value_clip_range: 0.2
+use_huber_loss: true
+huber_delta: 10.0
+
+# Training stability
+max_grad_norm: 0.5  # Gradient clipping
+kl_early_stop_threshold: 0.02  # Stop update if KL too large
+min_update_steps: 1  # Minimum updates per batch
+max_update_steps: 10  # Maximum updates per batch

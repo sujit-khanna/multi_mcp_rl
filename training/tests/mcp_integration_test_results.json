@@ -1,0 +1,35 @@
+{
+  "test_suite": "MCP Integration Test",
+  "timestamp": 1754152252.3871229,
+  "tests": {
+    "server_availability": {
+      "success": true,
+      "details": {
+        "python_execution_server.py": true,
+        "fmp_limited_server.py": true,
+        "polygon_limited_server.py": true,
+        "slack_limited_server.py": true,
+        "tavily_limited_server.py": true
+      }
+    },
+    "environment_import": {
+      "success": true
+    },
+    "python_execution_server": {
+      "success": true
+    },
+    "tool_manager": {
+      "success": true
+    },
+    "training_integration": {
+      "success": true
+    }
+  },
+  "summary": {
+    "duration_seconds": 1.8014721870422363,
+    "total_tests": 5,
+    "successful_tests": 5,
+    "success_rate": 100.0,
+    "overall_success": true
+  }
+}

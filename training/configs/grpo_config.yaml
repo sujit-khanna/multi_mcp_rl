@@ -1,0 +1,114 @@
+# GRPO Algorithm Configuration
+algorithm: "grpo"                    # Group Relative Policy Optimization
+algorithm_version: "1.0"             # Version for tracking
+
+# GRPO Core Parameters
+group_size: 2                        # Reduced for MPS memory constraints
+                                     # Higher = more stable gradients, slower training
+kl_penalty_coef: 0.1                # KL divergence penalty coefficient
+target_kl_divergence: 0.01          # Target KL for adaptive penalty adjustment
+adaptive_kl_penalty: true           # Adapt KL penalty based on actual KL
+kl_penalty_warmup_steps: 500        # Steps to warm up KL penalty
+
+# Generalized Advantage Estimation (GAE)
+gamma: 0.99                          # Discount factor for future rewards
+gae_lambda: 0.95                     # GAE lambda parameter for bias-variance tradeoff
+                                     # Higher lambda = less bias, more variance
+normalize_advantages: true           # Normalize advantages to have zero mean, unit variance
+normalize_rewards: true              # Normalize rewards across rollouts
+advantage_epsilon: 1e-8              # Small epsilon for advantage normalization
+
+# Policy Gradient Settings (PPO-style clipping)
+clip_ratio: 0.2                      # PPO clipping parameter
+                                     # Limits how much policy can change in one update
+entropy_coef: 0.01                   # Entropy regularization coefficient
+                                     # Higher = more exploration, less exploitation
+value_loss_coef: 0.5                # Value function loss coefficient
+                                     # Balance between policy and value learning
+
+# Reference Policy Management
+ref_policy_update_frequency: 10000   # Update reference policy every N steps
+ref_policy_ema_alpha: 0.99          # EMA coefficient for reference policy updates
+                                     # Higher = reference policy changes more slowly
+ref_policy_init_from_checkpoint: null # Initialize reference from checkpoint
+
+# Reward Processing
+reward_scaling: 1.0                  # Scale all rewards by this factor
+reward_clipping_value: 5.0           # Clip rewards to [-value, value]
+reward_clipping_enabled: true        # Enable reward clipping
+reward_normalization: "group"        # Normalize rewards within group ("group", "global", "none")
+
+# Episode and Environment Settings
+max_episode_length: 15               # Maximum turns per episode
+episode_timeout_penalty: -1.0       # Penalty for exceeding max length
+early_termination_reward: 0.1       # Small reward for successful early termination
+
+# Rollout Collection Settings
+rollout_parallel_envs: 1             # Reduced to 1 for MPS memory constraints
+rollout_batch_size: 4                # Reduced for MPS memory
+episodes_per_update: 2               # Reduced for MPS memory
+                                     # Total episodes per update = rollout_batch_size
+max_rollout_length: 10               # Reduced for MPS memory
+rollout_timeout_seconds: 300         # Timeout for rollout collection (5 minutes)
+
+# Training Stability and Regularization
+gradient_clipping_enabled: true      # Enable gradient clipping
+gradient_clipping_value: 1.0         # Gradient clipping threshold
+policy_loss_clipping: 10.0          # Clip policy loss to prevent instability
+value_loss_clipping: 10.0           # Clip value loss to prevent instability
+
+# Trust Region Constraints
+trust_region_enabled: false         # Enable trust region constraints
+trust_region_threshold: 0.01        # Trust region threshold for policy updates
+trust_region_decay: 0.99            # Decay trust region over time
+
+# Multi-turn Specific Settings
+turn_level_rewards: true            # Provide rewards at each turn
+turn_completion_bonus: 0.1          # Bonus for completing turns successfully
+reasoning_quality_weight: 0.3       # Weight for reasoning quality in rewards
+tool_efficiency_weight: 0.2         # Weight for tool use efficiency
+task_completion_weight: 0.5         # Weight for overall task completion
+
+# Advanced GRPO Settings
+use_importance_sampling: true       # Use importance sampling for off-policy correction
+importance_sampling_clip: 2.0       # Clip importance sampling ratios
+baseline_subtraction: true          # Subtract baseline from rewards
+baseline_ema_alpha: 0.95            # EMA for baseline estimation
+
+# Loss Function Weights and Scheduling
+policy_loss_weight: 1.0             # Weight for policy loss component
+value_loss_weight: 0.5              # Weight for value loss component
+entropy_loss_weight: 0.01           # Weight for entropy regularization
+kl_loss_weight: 0.1                 # Weight for KL divergence penalty
+
+# Learning Rate Scheduling for GRPO Components
+policy_lr_schedule: "constant"       # Learning rate schedule for policy
+value_lr_schedule: "constant"        # Learning rate schedule for value function
+entropy_schedule: "constant"         # Entropy coefficient schedule
+
+# Logging and Monitoring
+log_probabilities: true              # Log action probabilities
+log_advantages: true                 # Log computed advantages
+log_rewards_breakdown: true          # Log detailed reward breakdown
+log_kl_divergence: true             # Log KL divergence from reference
+log_episode_statistics: true        # Log episode-level statistics
+log_turn_level_metrics: true        # Log turn-level performance metrics
+
+# Debugging and Analysis
+save_rollout_data: false            # Save rollout data for analysis
+rollout_save_frequency: 1000        # Save rollouts every N steps
+analyze_policy_updates: true        # Analyze policy update statistics
+track_parameter_norms: true         # Track model parameter norms
+
+# Performance Monitoring
+monitor_memory_usage: true          # Monitor GPU/CPU memory usage
+monitor_rollout_time: true          # Monitor time for rollout collection
+monitor_training_time: true         # Monitor training step time
+performance_log_frequency: 100      # Log performance metrics every N steps
+
+# Tool Use Specific Rewards
+tool_selection_accuracy_weight: 0.2  # Weight for correct tool selection
+tool_parameter_accuracy_weight: 0.2  # Weight for correct tool parameters
+tool_sequence_efficiency_weight: 0.1 # Weight for efficient tool sequences
+reasoning_coherence_weight: 0.2      # Weight for coherent reasoning
+final_answer_quality_weight: 0.3     # Weight for final answer quality

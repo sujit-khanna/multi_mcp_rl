@@ -1,0 +1,95 @@
+# Training Configuration for Qwen3-0.6B
+# Optimized for local training on sample dataset
+
+# Model configuration
+model:
+  name: "Qwen/Qwen2.5-0.5B-Instruct"  # Use 0.5B model for MPS compatibility (proxy for Qwen3-0.6B)
+  use_lora: true
+  value_head_hidden_dim: 1024
+
+# Data paths (relative to skyrl_tool_agent directory)  
+data_path: "data/inputs/train.json"
+validation_data_path: "data/inputs/validation.json"
+output_dir: "./outputs/qwen3-0.6b-grpo"
+
+# Training hyperparameters
+num_epochs: 3  # Reduced for quick testing
+batch_size: 1  # Reduced to 1 for MPS memory constraints
+learning_rate: 5e-5  # Higher LR for smaller model
+weight_decay: 0.01
+warmup_steps: 100
+gradient_accumulation_steps: 4  # Effective batch size = 8
+
+# LoRA mode settings (for single GPU)
+lora_mode:
+  per_device_train_batch_size: 2
+  gradient_checkpointing: true
+  fp16: true  # Use FP16 for memory efficiency
+  
+# Full fine-tuning mode settings (requires more memory)
+full_finetune_mode:
+  per_device_train_batch_size: 1
+  gradient_checkpointing: true
+  bf16: true
+  deepspeed_config: "./configs/deepspeed_config.json"
+
+# Optimizer settings
+optimizer:
+  type: "adamw_torch"
+  adam_beta1: 0.9
+  adam_beta2: 0.999
+  adam_epsilon: 1e-8
+
+# Learning rate scheduler
+lr_scheduler:
+  type: "cosine"
+  warmup_ratio: 0.1
+
+# Evaluation settings
+eval_steps: 50  # Evaluate every 50 steps
+eval_batch_size: 4
+save_steps: 100
+save_total_limit: 3
+load_best_model_at_end: true
+metric_for_best_model: "eval_success_rate"
+greater_is_better: true
+
+# Early stopping
+early_stopping:
+  enabled: true
+  patience: 5
+  threshold: 0.001
+
+# Logging configuration
+logging:
+  logging_steps: 10
+  logging_first_step: true
+  report_to: ["wandb", "weave"]
+  wandb_project: "skyrl-qwen3-0.6b"
+  weave_project: "synergia_Agents/skyrl-qwen3-0.6b"
+  
+# Curriculum learning settings
+curriculum_learning:
+  enabled: true
+  warmup_epochs: 1  # Start with easy tasks
+  difficulty_schedule: "linear"
+  min_complexity: "easy"
+  max_complexity: "hard"
+  
+# Data loader settings
+cache_size: 1000
+num_workers: 4
+shuffle: true
+seed: 42
+
+# Device settings
+device_config:
+  use_mps: true  # For macOS Metal Performance Shaders
+  use_cuda: true  # For NVIDIA GPUs
+  device_map: "auto"
+  
+# Memory optimization
+memory_optimization:
+  gradient_checkpointing: true
+  clear_cache_steps: 100
+  max_memory_mb: 16000  # 16GB limit

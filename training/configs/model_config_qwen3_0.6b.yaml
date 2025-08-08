@@ -1,0 +1,73 @@
+# Model Configuration for Qwen3-0.6B
+# This configuration file defines the model architecture and loading parameters
+# specifically for Qwen3-0.6B model
+
+model_name: "Qwen/Qwen2.5-0.5B-Instruct"  # Using Qwen2.5-0.5B as Qwen3-0.6B proxy
+max_length: 8192  # Qwen3 supports up to 32k, but 8k is more efficient for training
+stop_sequences:
+  - "</tool_call>"
+  - "</think>"
+  - "</s>"
+  - "<|im_end|>"
+
+# Quantization settings for memory efficiency
+quantization:
+  load_in_4bit: true  # Enable for LoRA mode
+  bnb_4bit_compute_dtype: "float16"
+  bnb_4bit_use_double_quant: true
+  bnb_4bit_quant_type: "nf4"
+
+# LoRA configuration for efficient fine-tuning
+lora_mode:
+  enabled: true
+  rank: 16  # Slightly higher rank for 0.6B model
+  alpha: 32
+  dropout: 0.1
+  target_modules:
+    - "q_proj"
+    - "k_proj"
+    - "v_proj"
+    - "o_proj"
+    - "gate_proj"
+    - "up_proj"
+    - "down_proj"
+  bias: "none"
+  task_type: "CAUSAL_LM"
+
+# Full fine-tuning configuration (requires more memory)
+full_finetune_mode:
+  enabled: false
+  gradient_checkpointing: true
+  mixed_precision: "bf16"
+
+# Generation parameters
+generation:
+  temperature: 0.7
+  top_p: 0.9
+  top_k: 50
+  max_new_tokens: 2048
+  do_sample: true
+  pad_token_id: 151643  # Qwen specific
+  eos_token_id: 151645  # Qwen specific
+
+# Model-specific settings for Qwen3-0.6B
+model_specifics:
+  hidden_size: 896  # Smaller for 0.6B model
+  num_attention_heads: 14
+  num_key_value_heads: 2  # GQA support
+  intermediate_size: 4864
+  num_hidden_layers: 24
+  vocab_size: 151936
+  rope_theta: 1000000  # RoPE base frequency
+  use_sliding_window: false
+  max_position_embeddings: 32768
+  
+# Flash Attention settings (if available)
+attention:
+  use_flash_attention_2: true
+  attention_dropout: 0.0
+  
+# Cache configuration
+cache:
+  use_cache: true
+  cache_implementation: "static"  # Better for training

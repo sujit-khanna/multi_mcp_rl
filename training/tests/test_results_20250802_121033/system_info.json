@@ -1,0 +1,16 @@
+{
+  "success": true,
+  "system_info": {
+    "platform": "macOS-14.3-arm64-arm-64bit",
+    "python_version": "3.12.0",
+    "pytorch_version": "2.7.1",
+    "cuda_available": false,
+    "mps_available": true,
+    "mps_device": "Apple Silicon GPU",
+    "total_memory_gb": 64.0,
+    "available_memory_gb": 15.566207885742188
+  },
+  "test_name": "system_info",
+  "timestamp": 1754151033.772973,
+  "duration": 0.6242611408233643
+}

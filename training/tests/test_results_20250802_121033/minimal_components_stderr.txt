@@ -1,0 +1,39 @@
+INFO:__main__:🔥 Running minimal GRPO component tests...
+INFO:__main__:
+--- Testing Imports ---
+INFO:__main__:Testing imports...
+INFO:__main__:✅ QwenPolicy imported successfully
+/Users/sujitkhanna/Desktop/ongoing_projects/cooking_time_rl/skyrl_tool_agent/training/core/grpo_trainer.py:31: UserWarning: bitsandbytes not available. Using standard AdamW optimizer.
+  warnings.warn("bitsandbytes not available. Using standard AdamW optimizer.")
+INFO:__main__:✅ GRPOTrainer and Trajectory imported successfully
+INFO:__main__:✅ Data loader components imported successfully
+WARNING:mcp_tool_environment:Environment registration failed: register() got an unexpected keyword argument 'description'
+/Users/sujitkhanna/Desktop/ongoing_projects/cooking_time_rl/skyrl_tool_agent/training/data/trajectory_collector.py:29: UserWarning: Could not import environment modules: attempted relative import with no known parent package
+  warnings.warn(f"Could not import environment modules: {e}")
+INFO:__main__:✅ Trajectory collector imported successfully
+INFO:__main__:
+--- Testing Data Components ---
+INFO:__main__:Testing data components...
+INFO:__main__:✅ LRU Cache working correctly
+INFO:data.data_loader:CurriculumSampler initialized: {'easy': 0.3, 'medium': 0.5, 'hard': 0.2} -> {'easy': 0.1, 'medium': 0.4, 'hard': 0.5}
+INFO:__main__:✅ Curriculum Sampler working correctly
+INFO:data.data_loader:TaskBatcher initialized: target_turns=16, max_batch=4
+INFO:__main__:✅ Task Batcher working correctly
+INFO:__main__:
+--- Testing Trajectory Components ---
+INFO:__main__:Testing trajectory components...
+INFO:__main__:✅ Trajectory creation working correctly
+INFO:__main__:✅ EpisodeResult working correctly
+INFO:__main__:
+--- Testing Configuration Handling ---
+INFO:__main__:Testing configuration handling...
+INFO:__main__:✅ Configuration handling working correctly
+INFO:__main__:
+--- Testing Device Detection ---
+INFO:__main__:Testing device detection...
+INFO:__main__:✅ MPS available: mps
+INFO:__main__:✅ Device detection and tensor operations working correctly
+INFO:__main__:
+--- Testing Memory Monitoring ---
+INFO:__main__:Testing memory monitoring...
+INFO:__main__:✅ Memory monitoring working: 0.00GB -> 0.00GB

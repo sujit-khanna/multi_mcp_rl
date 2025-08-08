@@ -1,0 +1,52 @@
+{
+  "test_suite": "Quick Memory Test",
+  "timestamp": 1754151262.149856,
+  "system_info": {
+    "platform": "macOS-14.3-arm64-arm-64bit",
+    "python_version": "3.12.0",
+    "pytorch_version": "2.7.1",
+    "device_info": {
+      "cuda": {
+        "available": false
+      },
+      "mps": {
+        "available": true,
+        "device_name": "Apple Silicon GPU"
+      }
+    },
+    "memory": {
+      "total_gb": 64.0,
+      "available_gb": 15.619033813476562,
+      "used_percent": 75.6
+    }
+  },
+  "tests": {
+    "memory_monitoring": {
+      "device": "mps",
+      "initial_memory_gb": 0.0,
+      "peak_memory_gb": 0.00018715858459472656,
+      "final_memory_gb": 3.743171691894531e-05,
+      "memory_allocated_gb": 0.00018715858459472656,
+      "memory_freed_gb": 0.00014972686767578125,
+      "success": true
+    },
+    "configuration": {
+      "config_serialization": true,
+      "config_file_size": 156,
+      "success": true
+    },
+    "device_detection": {
+      "success": true,
+      "device": "mps",
+      "tensor_device": "mps:0",
+      "device_match": false
+    }
+  },
+  "summary": {
+    "duration_seconds": 0.0773618221282959,
+    "total_tests": 3,
+    "successful_tests": 3,
+    "success_rate": 100.0,
+    "overall_success": true
+  }
+}

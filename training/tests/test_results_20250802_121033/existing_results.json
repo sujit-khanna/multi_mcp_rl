@@ -1,0 +1,42 @@
+{
+  "success": true,
+  "existing_results": {
+    "memory_profile_lora": {
+      "file_path": "/Users/sujitkhanna/Desktop/ongoing_projects/cooking_time_rl/skyrl_tool_agent/training/tests/memory_profile_lora.json",
+      "data": {
+        "metadata": {
+          "mode": "lora",
+          "device": "mps",
+          "timestamp": 1754150513.736831,
+          "total_system_memory_gb": 64.0,
+          "baseline_memory_gb": 0.0
+        },
+        "results": [
+          {
+            "sequence_length": 512,
+            "batch_size": 1,
+            "gradient_accumulation_steps": 1,
+            "mode": "lora",
+            "device": "mps",
+            "start_memory_gb": 0.0,
+            "success": false,
+            "error": "Unexpected error: No package metadata was found for bitsandbytes",
+            "peak_memory_gb": 0.0,
+            "model_memory_gb": 0.0,
+            "training_memory_gb": 0.0,
+            "memory_per_sample": 0.0,
+            "recommended_batch_size": 0
+          }
+        ],
+        "recommendations": {
+          "error": "No successful configurations found"
+        }
+      },
+      "modified_time": 1754150513.7369597
+    }
+  },
+  "files_found": 1,
+  "test_name": "existing_results",
+  "timestamp": 1754151033.773797,
+  "duration": 0.6250851154327393
+}

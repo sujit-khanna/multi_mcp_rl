@@ -1,0 +1,119 @@
+# Training Configuration for GRPO
+# Experiment identification
+experiment_name: "qwen_grpo_tool_use"
+run_name: "grpo_qwen2.5_1.5b"
+output_dir: "./checkpoints"
+logging_dir: "./logs"
+log_level: "info"
+
+# Training duration and steps
+num_epochs: 3              # Number of epochs to train
+max_steps: 10000           # Maximum training steps (overrides epochs)
+save_steps: 1000           # Save checkpoint every N steps
+eval_steps: 500            # Evaluate every N steps
+logging_steps: 10          # Log metrics every N steps
+warmup_steps: 100          # Learning rate warmup steps
+
+# Batch sizes - Different for LoRA vs Full Fine-tuning
+lora_mode:
+  per_device_train_batch_size: 4    # LoRA can handle larger batches
+  per_device_eval_batch_size: 8     # Evaluation batch size
+  gradient_accumulation_steps: 4     # Accumulate gradients over 4 steps
+  effective_batch_size: 16          # 4 * 4 = 16 total batch size
+
+full_finetune_mode:
+  per_device_train_batch_size: 1    # Full fine-tuning needs smaller batches
+  per_device_eval_batch_size: 2     # Smaller eval batch for memory
+  gradient_accumulation_steps: 16   # Accumulate to get same effective batch
+  effective_batch_size: 16          # 1 * 16 = 16 total batch size (2 GPUs)
+
+# Data loading settings
+dataloader_num_workers: 4          # Number of data loading workers
+dataloader_pin_memory: true        # Pin memory for faster GPU transfer
+remove_unused_columns: false       # Keep all columns for custom processing
+group_by_length: false             # Don't group by length for tool use tasks
+
+# Optimizer settings
+# Learning rates - different for LoRA vs full fine-tuning  
+lora_learning_rate: 2e-4           # Higher LR for LoRA adapters
+full_finetune_learning_rate: 5e-6  # Lower LR for full model fine-tuning
+
+# Optimizer hyperparameters
+weight_decay: 0.01                 # L2 regularization
+adam_beta1: 0.9                    # Adam beta1 parameter
+adam_beta2: 0.95                   # Adam beta2 parameter (better for large models)
+adam_epsilon: 1e-5                 # Adam epsilon for numerical stability
+max_grad_norm: 1.0                 # Gradient clipping threshold
+
+# Learning rate scheduler
+lr_scheduler_type: "cosine"        # Cosine annealing schedule
+lr_scheduler_kwargs:
+  num_warmup_steps: 100            # Warmup steps
+  num_training_steps: 10000        # Total training steps
+  num_cycles: 0.5                  # Half cycle for cosine schedule
+  final_div_factor: 10.0           # Final LR = initial_lr / final_div_factor
+
+# Data processing settings
+max_prompt_length: 2048            # Maximum prompt length in tokens
+max_response_length: 2048          # Maximum response length in tokens
+max_total_length: 4096             # Maximum total sequence length
+streaming: true                    # Use streaming datasets
+shuffle_buffer_size: 10000         # Buffer size for shuffling streaming data
+seed: 42                          # Random seed for reproducibility
+
+# Evaluation configuration
+evaluation_strategy: "steps"       # Evaluate every N steps
+eval_steps: 500                   # Evaluation frequency
+eval_accumulation_steps: 1        # Steps to accumulate eval batch
+metric_for_best_model: "eval_success_rate"  # Primary metric for model selection
+greater_is_better: true           # Higher success rate is better
+load_best_model_at_end: true      # Load best checkpoint at end
+
+# Early stopping (optional)
+early_stopping:
+  enabled: false                  # Enable early stopping
+  patience: 5                     # Stop after N evaluations without improvement
+  threshold: 0.01                 # Minimum improvement threshold
+
+# Checkpointing and saving
+save_strategy: "steps"            # Save checkpoints by steps
+save_steps: 1000                  # Checkpoint frequency
+save_total_limit: 3               # Keep only last 3 checkpoints
+save_only_model: false            # Save optimizer state too
+save_on_each_node: false          # Only save on main node in multi-node
+resume_from_checkpoint: null      # Path to resume from (null = start fresh)
+
+# Distributed training settings
+local_rank: -1                    # Local rank for distributed training
+deepspeed: null                   # Path to DeepSpeed config (set in launcher)
+fp16: false                       # Use fp16 precision
+bf16: true                        # Use bfloat16 precision (better than fp16)
+fp16_opt_level: "O1"             # Mixed precision optimization level
+half_precision_backend: "auto"    # Backend for mixed precision
+
+# Memory and performance optimization
+gradient_checkpointing: true      # Save memory during backprop
+dataloader_prefetch_factor: 2     # Prefetch batches
+max_memory_MB: 40000              # Maximum memory per GPU (40GB A100)
+
+# Logging and monitoring
+report_to: ["wandb"]              # Report metrics to Weights & Biases
+logging_first_step: true          # Log the first training step
+logging_nan_inf_filter: true      # Filter NaN/Inf from logs
+log_predictions: true             # Log model predictions during eval
+
+# WandB configuration
+wandb:
+  project: "skyrl_grpo_training"  # WandB project name
+  entity: null                    # WandB entity (organization)
+  name: null                      # Run name (will use run_name)
+  tags: ["grpo", "qwen", "tool_use", "multi_turn"]  # Tags for organization
+  group: "qwen2.5_1.5b"          # Group related runs
+  job_type: "train"              # Job type
+  notes: "GRPO training for multi-turn tool use with Qwen2.5-1.5B"
+
+# Push to hub settings (optional)
+push_to_hub: false                # Don't push to HuggingFace Hub by default
+hub_model_id: null                # Model ID for hub
+hub_strategy: "every_save"        # When to push to hub
+hub_token: null                   # HuggingFace token

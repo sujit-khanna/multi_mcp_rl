@@ -1,0 +1,76 @@
+# Accelerate Configuration for Single GPU Training (LoRA Mode)
+# This config is optimized for single A100 40GB GPU with LoRA fine-tuning
+
+compute_environment: LOCAL_MACHINE    # Running on local machine
+distributed_type: 'NO'                # Single GPU, no distribution
+use_cpu: false                        # Use GPU for training
+debug: false                          # Disable debug mode for performance
+
+# GPU Configuration - Single GPU Setup
+num_processes: 1                      # Single process for single GPU
+gpu_ids: 'all'                        # Use available GPU (auto-detect)
+machine_rank: 0                       # Single machine rank
+num_machines: 1                       # Single machine setup
+main_process_ip: null                 # Not needed for single GPU
+main_process_port: null               # Not needed for single GPU
+
+# Mixed Precision Settings
+mixed_precision: 'bf16'               # Use bfloat16 for better stability
+fp16_backend: 'auto'                  # Auto-select backend
+fp16_opt_level: 'O1'                  # Mixed precision optimization level
+downcast_bf16: 'no'                   # Don't downcast bf16 operations
+
+# Memory Optimization for Single GPU
+gradient_accumulation_steps: 4        # Accumulate gradients (matches LoRA config)
+gradient_clipping: 1.0                # Clip gradients to prevent exploding
+dataloader_num_workers: 4             # Number of data loading workers
+dataloader_pin_memory: true           # Pin memory for faster transfer
+
+# Model and Training Settings
+main_training_function: 'main'        # Entry point function name
+logging_dir: './logs'                 # Directory for logs
+project_dir: './training'             # Project directory
+save_strategy: 'steps'                # Save checkpoints by steps
+
+# DeepSpeed Settings (Disabled for Single GPU)
+deepspeed_config_file: null           # No DeepSpeed for single GPU
+zero_stage: 0                         # No ZeRO optimization needed
+
+# FSDP Settings (Disabled for Single GPU)
+fsdp_config: {}                       # Empty FSDP config
+fsdp_transformer_layer_cls_to_wrap: null  # No FSDP wrapping
+
+# Megatron-LM Settings (Disabled)
+megatron_lm_config: {}                # Empty Megatron config
+
+# Environment and Runtime Settings
+enable_cpu_affinity: false            # Don't set CPU affinity
+notebook: false                       # Not running in notebook
+rdzv_backend: 'static'                # Rendezvous backend (not used in single GPU)
+
+# Torch DDP Settings (Not used for single GPU)
+ddp_backend: null                     # No DDP backend needed
+ddp_broadcast_buffers: null           # No DDP buffer broadcasting
+ddp_bucket_cap_mb: null               # No DDP bucket cap
+ddp_find_unused_parameters: null      # No unused parameter detection
+
+# Advanced Settings
+tpu_name: null                        # No TPU usage
+tpu_zone: null                        # No TPU zone
+commands_config_file: null            # No additional commands
+dynamo_backend: 'NO'                  # Disable PyTorch 2.0 dynamo
+dynamo_mode: null                     # No dynamo mode
+
+# Logging and Monitoring
+log_with: ['wandb']                   # Use Weights & Biases for logging
+logging_first_step: true              # Log the first training step
+logging_nan_inf_filter: true          # Filter NaN/Inf from logs
+
+# Memory and Performance Optimization
+split_batches: false                  # Don't split batches across devices
+dispatch_batches: true                # Dispatch batches efficiently
+even_batches: true                    # Ensure even batch sizes
+use_seedable_sampler: true            # Use reproducible sampling
+
+# Note: For multi-GPU full fine-tuning mode, create a separate config file
+# with distributed_type: 'MULTI_GPU', num_processes: 2, and DeepSpeed settings

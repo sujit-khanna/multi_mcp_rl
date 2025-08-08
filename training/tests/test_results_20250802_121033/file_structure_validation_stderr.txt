@@ -1,0 +1,7 @@
+/Users/sujitkhanna/Desktop/ongoing_projects/cooking_time_rl/skyrl_tool_agent/training/core/grpo_trainer.py:31: UserWarning: bitsandbytes not available. Using standard AdamW optimizer.
+  warnings.warn("bitsandbytes not available. Using standard AdamW optimizer.")
+WARNING:mcp_tool_environment:Environment registration failed: register() got an unexpected keyword argument 'description'
+/Users/sujitkhanna/Desktop/ongoing_projects/cooking_time_rl/skyrl_tool_agent/training/data/trajectory_collector.py:29: UserWarning: Could not import environment modules: attempted relative import with no known parent package
+  warnings.warn(f"Could not import environment modules: {e}")
+INFO:data.data_loader:CurriculumSampler initialized: {'easy': 0.3, 'medium': 0.5, 'hard': 0.2} -> {'easy': 0.1, 'medium': 0.4, 'hard': 0.5}
+INFO:data.data_loader:TaskBatcher initialized: target_turns=64, max_batch=16
