@@ -127,7 +127,13 @@ class QwenPolicyWithValuePrompting(QwenPolicyWithPrompting):
         import os
         
         # Save base model
-        super().save_checkpoint(checkpoint_dir)
+        # NOTE: The base class chain (QwenPolicyWithPrompting -> QwenPolicy) does not
+        # implement `save_checkpoint`, only `save_model`. The previous call to
+        # super().save_checkpoint raised an AttributeError during checkpointing.
+        # We instead use the existing `save_model` API which persists the model
+        # (LoRA or full) and tokenizer to the given directory.
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        self.save_model(checkpoint_dir)
         
         # Save value head
         value_head_path = os.path.join(checkpoint_dir, "value_head.pt")

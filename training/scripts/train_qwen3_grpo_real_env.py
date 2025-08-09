@@ -216,19 +216,54 @@ class RealEnvironmentGRPOTrainer:
                 project=os.environ.get('WANDB_PROJECT', 'skyrl-grpo-real-env'),
                 name=f"grpo-real-env-{time.strftime('%Y%m%d-%H%M%S')}",
                 config={
-                    **self.configs['grpo'],
-                    **self.configs['training'],
-                    **self.configs['environment'],
+                    **self.configs.get('grpo', {}),
+                    **self.configs.get('training', {}),
+                    **self.configs.get('environment', {}),
                     'device': str(self.device),
                     'real_environment': True,
                     'phase1_fixes': ['value_function', 'ref_policy_updates', 'gradient_clipping']
                 }
             )
+            # Define a consistent step metric so charts align by training step
+            try:
+                wandb.define_metric('trainer/step')
+                wandb.define_metric('trainer/*', step_metric='trainer/step')
+                wandb.define_metric('rollouts/*', step_metric='trainer/step')
+                wandb.define_metric('eval/*', step_metric='trainer/step')
+            except Exception:
+                pass
             logger.info("WandB logging initialized")
         
         if self.use_weave:
             weave.init(project_name=os.environ.get('WEAVE_PROJECT', 'skyrl-grpo-real-env'))
             logger.info("Weave logging initialized")
+
+    def _log_wandb(self, payload: dict, step: int, commit: bool = True) -> None:
+        """Safely log numeric scalars to WandB with a unified step key.
+
+        Converts tensors and numpy scalars to Python numbers to avoid silent drops.
+        """
+        if not self.use_wandb:
+            return
+        safe = {}
+        for k, v in payload.items():
+            try:
+                if hasattr(v, 'item'):
+                    safe[k] = v.item()
+                else:
+                    # numpy and python scalars
+                    import numpy as _np
+                    if isinstance(v, (_np.floating, _np.integer)):
+                        safe[k] = float(v)
+                    elif isinstance(v, (int, float)):
+                        safe[k] = v
+            except Exception:
+                continue
+        safe['trainer/step'] = int(step)
+        try:
+            wandb.log(safe, commit=commit)
+        except Exception as e:
+            logger.warning(f"Failed to log to WandB: {e}")
     
     def load_data(self):
         """Load training and validation data"""
@@ -651,52 +686,31 @@ class RealEnvironmentGRPOTrainer:
                     'reward': f"{np.mean(trajectory_rewards):.3f}"
                 })
                 
-                # Comprehensive logging to wandb
-                if self.use_wandb:
-                    # Calculate additional metrics
-                    log_metrics = {
-                        'step': self.global_step,
-                        'epoch': epoch,
-                        
-                        # Rewards - detailed statistics
-                        'rewards/mean': np.mean(trajectory_rewards) if trajectory_rewards else 0,
-                        'rewards/std': np.std(trajectory_rewards) if trajectory_rewards else 0,
-                        'rewards/min': np.min(trajectory_rewards) if trajectory_rewards else 0,
-                        'rewards/max': np.max(trajectory_rewards) if trajectory_rewards else 0,
-                        'rewards/median': np.median(trajectory_rewards) if trajectory_rewards else 0,
-                        
-                        # Trajectory lengths
-                        'trajectories/avg_length': np.mean(trajectory_lengths) if trajectory_lengths else 0,
-                        'trajectories/max_length': np.max(trajectory_lengths) if trajectory_lengths else 0,
-                        'trajectories/min_length': np.min(trajectory_lengths) if trajectory_lengths else 0,
-                        'trajectories/count': len(trajectories),
-                        
-                        # Losses from metrics
-                        'losses/total': metrics.get('total_loss', 0),
-                        'losses/policy': metrics.get('policy_loss', 0),
-                        'losses/value': metrics.get('value_loss', 0),
-                        'losses/entropy': metrics.get('entropy', 0),
-                        
-                        # KL and advantages
-                        'training/kl_divergence': metrics.get('kl_divergence', 0),
-                        'training/kl_coef': metrics.get('kl_coef', 0),
-                        'training/avg_advantage': metrics.get('avg_advantage', 0),
-                        'training/std_advantage': metrics.get('std_advantage', 0),
-                        'training/clip_fraction': metrics.get('clip_fraction', 0),
-                        
-                        # Learning rate
-                        'training/learning_rate': self.trainer.optimizer.param_groups[0]['lr'],
-                        
-                        # GPU metrics if available
-                        'system/gpu_memory_allocated': torch.cuda.memory_allocated() / (1024**3) if torch.cuda.is_available() else 0,
-                        'system/gpu_memory_reserved': torch.cuda.memory_reserved() / (1024**3) if torch.cuda.is_available() else 0,
-                    }
-                    
-                    # Add gradient norm if available
-                    if hasattr(self.trainer, 'grad_norm'):
-                        log_metrics['gradients/norm'] = self.trainer.grad_norm
-                    
-                    wandb.log(log_metrics)
+                # Log to WandB with clear namespaces
+                rollout_log = {
+                    'rollouts/avg_reward': np.mean(trajectory_rewards) if trajectory_rewards else 0,
+                    'rollouts/avg_length': np.mean(trajectory_lengths) if trajectory_lengths else 0,
+                    'rollouts/min_reward': np.min(trajectory_rewards) if trajectory_rewards else 0,
+                    'rollouts/max_reward': np.max(trajectory_rewards) if trajectory_rewards else 0,
+                    'rollouts/num_trajectories': len(trajectories),
+                }
+                trainer_log = {
+                    'trainer/total_loss': metrics.get('total_loss', 0),
+                    'trainer/policy_loss': metrics.get('policy_loss', 0),
+                    'trainer/value_loss': metrics.get('value_loss', 0),
+                    'trainer/kl_divergence': metrics.get('kl_divergence', 0),
+                    'trainer/kl_coef': metrics.get('kl_coef', 0),
+                    'trainer/avg_advantage': metrics.get('avg_advantage', 0),
+                    'trainer/std_advantage': metrics.get('std_advantage', 0),
+                    'trainer/learning_rate': self.trainer.optimizer.param_groups[0]['lr'],
+                    'trainer/epoch': int(epoch),
+                }
+                # Useful system traces
+                system_log = {
+                    'system/gpu_memory_allocated': (torch.cuda.memory_allocated() / (1024**3)) if torch.cuda.is_available() else 0,
+                    'system/gpu_memory_reserved': (torch.cuda.memory_reserved() / (1024**3)) if torch.cuda.is_available() else 0,
+                }
+                self._log_wandb({**rollout_log, **trainer_log, **system_log}, step=self.global_step, commit=True)
                 
                 self.global_step += 1
                 
@@ -727,6 +741,11 @@ class RealEnvironmentGRPOTrainer:
         logger.info(f"Epoch {epoch} completed:")
         for key, value in epoch_stats.items():
             logger.info(f"  {key}: {value:.4f}")
+        # Epoch summary logging
+        if epoch_stats:
+            epoch_log = {f'trainer/{k}': v for k, v in epoch_stats.items()}
+            epoch_log['trainer/epoch'] = int(epoch)
+            self._log_wandb(epoch_log, step=self.global_step, commit=True)
         
         return epoch_stats
     
@@ -773,11 +792,9 @@ class RealEnvironmentGRPOTrainer:
             self.best_eval_score = eval_metrics['eval_avg_reward']
             self.save_checkpoint('best_model', is_best=True)
         
-        if self.use_wandb:
-            wandb.log({
-                'epoch': epoch,
-                **eval_metrics
-            })
+        eval_log = {f'eval/{k}': v for k, v in eval_metrics.items()}
+        eval_log['trainer/epoch'] = int(epoch)
+        self._log_wandb(eval_log, step=self.global_step, commit=True)
         
         return eval_metrics
     
