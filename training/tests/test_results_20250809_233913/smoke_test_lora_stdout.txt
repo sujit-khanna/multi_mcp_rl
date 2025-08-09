@@ -1,0 +1,25 @@
+🔥 GRPO Training Pipeline Smoke Test
+Mode: lora
+Skip Model Tests: True
+Target: Complete in under 2 minutes
+--------------------------------------------------
+
+============================================================
+SMOKE TEST RESULTS
+============================================================
+Mode: lora
+Device: cuda
+Elapsed Time: 8.7 seconds
+Skip Model Tests: True
+
+Test Results:
+  policy_initialization: ✅ PASS
+  data_loading: ✅ PASS
+  trajectory_collection: ✅ PASS
+  grpo_training: ❌ FAIL
+
+Summary: 3/4 tests passed
+⚠️  Some tests failed. Check logs for details.
+============================================================
+
+❌ Smoke test failed!

@@ -1,0 +1,27 @@
+🔍 GRPO Memory Profiler
+Mode: lora
+Sequence lengths: [512, 1024, 2048]
+Max batch size: 8
+Max gradient accumulation: 16
+--------------------------------------------------
+⚡ Quick mode enabled - testing fewer configurations
+
+================================================================================
+MEMORY PROFILING RESULTS
+================================================================================
+Mode: lora
+Device: cuda
+Total System Memory: 216.3 GB
+Baseline Memory: 0.00 GB
+
+Configurations Tested: 2
+Successful: 0
+Failed: 2
+
+❌ FAILED CONFIGURATIONS: 2
+  SeqLen=512, Batch=1: Runtime error: Only Tensors created explicitly by 
+  SeqLen=1024, Batch=1: Runtime error: Only Tensors created explicitly by 
+================================================================================
+
+✅ Memory profiling completed!
+📄 Results saved to: memory_profile_lora.json

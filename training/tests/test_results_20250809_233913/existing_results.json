@@ -1,0 +1,152 @@
+{
+  "success": true,
+  "existing_results": {
+    "memory_profile_lora": {
+      "file_path": "/home/ubuntu/multi_mcp_rl/training/tests/memory_profile_lora.json",
+      "data": {
+        "metadata": {
+          "mode": "lora",
+          "device": "cuda",
+          "timestamp": 1754685573.6993573,
+          "total_system_memory_gb": 216.25842666625977,
+          "baseline_memory_gb": 0.0
+        },
+        "results": [
+          {
+            "sequence_length": 512,
+            "batch_size": 1,
+            "gradient_accumulation_steps": 1,
+            "mode": "lora",
+            "device": "cuda",
+            "start_memory_gb": 0.0,
+            "success": false,
+            "error": "Runtime error: Only Tensors created explicitly by the user (graph leaves) support the deepcopy protocol at the moment.  If you were attempting to deepcopy a module, this may be because of a torch.nn.utils.weight_norm usage, see https://github.com/pytorch/pytorch/pull/103001",
+            "peak_memory_gb": 0.0,
+            "model_memory_gb": 5.826162815093994,
+            "training_memory_gb": 0.0,
+            "memory_per_sample": 0.0,
+            "recommended_batch_size": 0
+          },
+          {
+            "sequence_length": 1024,
+            "batch_size": 1,
+            "gradient_accumulation_steps": 1,
+            "mode": "lora",
+            "device": "cuda",
+            "start_memory_gb": 0.008056640625,
+            "success": false,
+            "error": "Runtime error: Only Tensors created explicitly by the user (graph leaves) support the deepcopy protocol at the moment.  If you were attempting to deepcopy a module, this may be because of a torch.nn.utils.weight_norm usage, see https://github.com/pytorch/pytorch/pull/103001",
+            "peak_memory_gb": 0.0,
+            "model_memory_gb": 5.824697971343994,
+            "training_memory_gb": 0.0,
+            "memory_per_sample": 0.0,
+            "recommended_batch_size": 0
+          }
+        ],
+        "recommendations": {
+          "error": "No successful configurations found"
+        }
+      },
+      "modified_time": 1754781831.8725739
+    },
+    "mcp_integration_test_results": {
+      "file_path": "/home/ubuntu/multi_mcp_rl/training/tests/mcp_integration_test_results.json",
+      "data": {
+        "test_suite": "MCP Integration Test",
+        "timestamp": 1754152252.3871229,
+        "tests": {
+          "server_availability": {
+            "success": true,
+            "details": {
+              "python_execution_server.py": true,
+              "fmp_limited_server.py": true,
+              "polygon_limited_server.py": true,
+              "slack_limited_server.py": true,
+              "tavily_limited_server.py": true
+            }
+          },
+          "environment_import": {
+            "success": true
+          },
+          "python_execution_server": {
+            "success": true
+          },
+          "tool_manager": {
+            "success": true
+          },
+          "training_integration": {
+            "success": true
+          }
+        },
+        "summary": {
+          "duration_seconds": 1.8014721870422363,
+          "total_tests": 5,
+          "successful_tests": 5,
+          "success_rate": 100.0,
+          "overall_success": true
+        }
+      },
+      "modified_time": 1754781831.871574
+    },
+    "quick_memory_test_results": {
+      "file_path": "/home/ubuntu/multi_mcp_rl/training/tests/quick_memory_test_results.json",
+      "data": {
+        "test_suite": "Quick Memory Test",
+        "timestamp": 1754151262.149856,
+        "system_info": {
+          "platform": "macOS-14.3-arm64-arm-64bit",
+          "python_version": "3.12.0",
+          "pytorch_version": "2.7.1",
+          "device_info": {
+            "cuda": {
+              "available": false
+            },
+            "mps": {
+              "available": true,
+              "device_name": "Apple Silicon GPU"
+            }
+          },
+          "memory": {
+            "total_gb": 64.0,
+            "available_gb": 15.619033813476562,
+            "used_percent": 75.6
+          }
+        },
+        "tests": {
+          "memory_monitoring": {
+            "device": "mps",
+            "initial_memory_gb": 0.0,
+            "peak_memory_gb": 0.00018715858459472656,
+            "final_memory_gb": 3.743171691894531e-05,
+            "memory_allocated_gb": 0.00018715858459472656,
+            "memory_freed_gb": 0.00014972686767578125,
+            "success": true
+          },
+          "configuration": {
+            "config_serialization": true,
+            "config_file_size": 156,
+            "success": true
+          },
+          "device_detection": {
+            "success": true,
+            "device": "mps",
+            "tensor_device": "mps:0",
+            "device_match": false
+          }
+        },
+        "summary": {
+          "duration_seconds": 0.0773618221282959,
+          "total_tests": 3,
+          "successful_tests": 3,
+          "success_rate": 100.0,
+          "overall_success": true
+        }
+      },
+      "modified_time": 1754781831.8725739
+    }
+  },
+  "files_found": 3,
+  "test_name": "existing_results",
+  "timestamp": 1754782754.8697224,
+  "duration": 1.4673612117767334
+}

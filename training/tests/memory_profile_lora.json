@@ -2,8 +2,8 @@
   "metadata": {
     "mode": "lora",
     "device": "cuda",
-    "timestamp": 1754685573.6993573,
-    "total_system_memory_gb": 216.25842666625977,
+    "timestamp": 1754782785.0241053,
+    "total_system_memory_gb": 216.2584228515625,
     "baseline_memory_gb": 0.0
   },
   "results": [

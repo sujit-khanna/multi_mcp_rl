@@ -439,6 +439,9 @@ class QwenPolicy:
                 setattr(gen_config, key, value)
         
         # Generate with the model
+        # Disable cache if gradient checkpointing is enabled to avoid warnings
+        use_cache = not getattr(self.model, 'gradient_checkpointing', False)
+        
         with torch.no_grad():
             generated_ids = self.model.generate(
                 input_ids=inputs.input_ids,
@@ -446,6 +449,7 @@ class QwenPolicy:
                 generation_config=gen_config,
                 pad_token_id=self.tokenizer.pad_token_id,
                 eos_token_id=self._stop_token_ids if self._stop_token_ids else self.tokenizer.eos_token_id,
+                use_cache=use_cache,
             )
         
         # Extract only the newly generated tokens

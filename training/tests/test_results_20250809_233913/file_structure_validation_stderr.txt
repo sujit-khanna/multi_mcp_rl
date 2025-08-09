@@ -1,0 +1,3 @@
+WARNING:mcp_tool_environment:Environment registration failed: An environment with name `mcp_tool_env` is already registered (id=`mcp_tool_env`). Environment names must be unique.
+INFO:data.data_loader:CurriculumSampler initialized: {'easy': 0.3, 'medium': 0.5, 'hard': 0.2} -> {'easy': 0.1, 'medium': 0.4, 'hard': 0.5}
+INFO:data.data_loader:TaskBatcher initialized: target_turns=64, max_batch=16

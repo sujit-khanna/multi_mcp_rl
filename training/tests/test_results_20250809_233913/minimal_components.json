@@ -1,0 +1,19 @@
+{
+  "success": true,
+  "return_code": 0,
+  "stdout": "\n============================================================\nMINIMAL TEST RESULTS\n============================================================\n  Imports: \u2705 PASS\n  Data Components: \u2705 PASS\n  Trajectory Components: \u2705 PASS\n  Configuration Handling: \u2705 PASS\n  Device Detection: \u2705 PASS\n  Memory Monitoring: \u2705 PASS\n\nSummary: 6/6 tests passed\n\ud83c\udf89 ALL TESTS PASSED!\n",
+  "stderr": "INFO:__main__:\ud83d\udd25 Running minimal GRPO component tests...\nINFO:__main__:\n--- Testing Imports ---\nINFO:__main__:Testing imports...\nINFO:environments.mcp_tool_environment:\u2705 MCPToolEnvironment registered with SkyRL\nINFO:__main__:\u2705 QwenPolicy imported successfully\nINFO:__main__:\u2705 GRPOTrainer and Trajectory imported successfully\nINFO:__main__:\u2705 Data loader components imported successfully\nWARNING:mcp_tool_environment:Environment registration failed: An environment with name `mcp_tool_env` is already registered (id=`mcp_tool_env`). Environment names must be unique.\nINFO:__main__:\u2705 Trajectory collector imported successfully\nINFO:__main__:\n--- Testing Data Components ---\nINFO:__main__:Testing data components...\nINFO:__main__:\u2705 LRU Cache working correctly\nINFO:data.data_loader:CurriculumSampler initialized: {'easy': 0.3, 'medium': 0.5, 'hard': 0.2} -> {'easy': 0.1, 'medium': 0.4, 'hard': 0.5}\nINFO:__main__:\u2705 Curriculum Sampler working correctly\nINFO:data.data_loader:TaskBatcher initialized: target_turns=16, max_batch=4\nINFO:__main__:\u2705 Task Batcher working correctly\nINFO:__main__:\n--- Testing Trajectory Components ---\nINFO:__main__:Testing trajectory components...\nINFO:__main__:\u2705 Trajectory creation working correctly\nINFO:__main__:\u2705 EpisodeResult working correctly\nINFO:__main__:\n--- Testing Configuration Handling ---\nINFO:__main__:Testing configuration handling...\nINFO:__main__:\u2705 Configuration handling working correctly\nINFO:__main__:\n--- Testing Device Detection ---\nINFO:__main__:Testing device detection...\nINFO:__main__:\u2705 CUDA available: cuda\nINFO:__main__:\u2705 Device detection and tensor operations working correctly\nINFO:__main__:\n--- Testing Memory Monitoring ---\nINFO:__main__:Testing memory monitoring...\nINFO:__main__:\u2705 Memory monitoring working: 0.92GB -> 0.92GB\n",
+  "command": "/home/ubuntu/multi_mcp_rl/.venv/bin/python /home/ubuntu/multi_mcp_rl/training/tests/minimal_test.py",
+  "test_summary": "All minimal tests passed",
+  "components_tested": [
+    "Imports",
+    "Data Components",
+    "Trajectory Components",
+    "Configuration Handling",
+    "Device Detection",
+    "Memory Monitoring"
+  ],
+  "test_name": "minimal_components",
+  "timestamp": 1754782766.1703546,
+  "duration": 12.767993688583374
+}

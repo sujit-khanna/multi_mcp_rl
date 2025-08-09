@@ -172,6 +172,28 @@ async def list_tools() -> List[Tool]:
                     }
                 }
             ),
+            Tool(
+                name="fmp_get_change_percent",
+                description="Get percentage change for a stock ticker",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "symbol": {"type": "string", "description": "Stock ticker symbol (e.g., 'AAPL')"}
+                    },
+                    "required": ["symbol"]
+                }
+            ),
+            Tool(
+                name="fmp_get_previous_close",
+                description="Get previous close price for a stock ticker",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "symbol": {"type": "string", "description": "Stock ticker symbol (e.g., 'AAPL')"}
+                    },
+                    "required": ["symbol"]
+                }
+            ),
         ])
     else:
         logger.warning("FMP client not available - check FMP_API_KEY")
@@ -278,6 +300,20 @@ async def call_tool(name: str, args: Dict[str, Any]) -> List[TextContent]:
                     result += f"Published: {article.get('publishedDate', 'N/A')}\n"
                     result += f"Site: {article.get('site', 'N/A')}\n---\n"
                 return [TextContent(type="text", text=result)]
+
+        elif name == "fmp_get_change_percent":
+            data = await fmp_request(f"/v3/quote/{args['symbol']}")
+            if data:
+                quote = data[0] if isinstance(data, list) else data
+                change_percent = quote.get('changesPercentage', 'N/A')
+                return [TextContent(type="text", text=f"Change Percent for {args['symbol']}: {change_percent}%")]
+
+        elif name == "fmp_get_previous_close":
+            data = await fmp_request(f"/v3/quote/{args['symbol']}")
+            if data:
+                quote = data[0] if isinstance(data, list) else data
+                previous_close = quote.get('previousClose', 'N/A')
+                return [TextContent(type="text", text=f"Previous Close for {args['symbol']}: ${previous_close}")]
 
         else:
             return [TextContent(type="text", text=f"Tool '{name}' not found or not available")]

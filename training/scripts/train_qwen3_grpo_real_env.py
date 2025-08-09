@@ -31,6 +31,11 @@ from tqdm import tqdm
 sys.path.append(str(Path(__file__).parent.parent))
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
+# Add utils path for tool validation
+utils_path = str(Path(__file__).parent.parent / "utils")
+if utils_path not in sys.path:
+    sys.path.insert(0, utils_path)
+
 # Import our enhanced components
 from core.qwen_policy_with_value_prompting import QwenPolicyWithValuePrompting
 from core.grpo_trainer_gradient_fix import GRPOTrainerGradientFix
@@ -474,6 +479,24 @@ class RealEnvironmentGRPOTrainer:
         await self.shared_tool_manager.initialize()
         
         logger.info(f"Shared tool manager initialized with {len(self.shared_tool_manager.get_available_tools())} tools")
+        
+        # Perform tool validation preflight check
+        from utils.tool_validator import validate_tools_before_training
+        
+        data_paths = [
+            "data/processed/train.json",
+            "data/inputs/train.json"
+        ]
+        config_paths = [self.config_path]
+        
+        validation_report = await validate_tools_before_training(
+            self.shared_tool_manager, 
+            data_paths, 
+            config_paths
+        )
+        
+        # Store validation results for later use
+        self.tool_validation_report = validation_report
         
         # Create environment factory with enhanced logging
         def env_factory(task_data: Dict[str, Any]) -> MCPToolEnvironmentWithLogging:
