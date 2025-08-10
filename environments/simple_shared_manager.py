@@ -217,7 +217,7 @@ class SimpleSharedMCPToolManager:
                     await session.initialize()
                     result = await asyncio.wait_for(
                         session.call_tool(tool_name, arguments), 
-                        timeout=30.0
+                        timeout=10.0  # Reduced timeout to prevent hanging
                     )
                     
                     text = result.content[0].text if result.content and hasattr(result.content[0], 'text') else str(result.content)

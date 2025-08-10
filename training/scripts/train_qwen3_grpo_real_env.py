@@ -848,6 +848,146 @@ class RealEnvironmentGRPOTrainer:
         
         logger.info(f"Checkpoint saved to {checkpoint_dir}")
     
+    def _log_wandb(self, metrics: Dict[str, Any], step: Optional[int] = None, commit: bool = True):
+        """Log metrics to WandB"""
+        if self.use_wandb:
+            try:
+                wandb.log(metrics, step=step, commit=commit)
+                logger.debug(f"WandB logged metrics: {list(metrics.keys())}")
+            except Exception as e:
+                logger.warning(f"Failed to log to WandB: {e}")
+        
+        if HAS_WEAVE and hasattr(weave, 'log'):
+            try:
+                weave.log(metrics)
+                logger.debug(f"Weave logged metrics: {list(metrics.keys())}")
+            except Exception as e:
+                logger.warning(f"Failed to log to Weave: {e}")
+    
+    async def train_epoch(self, epoch: int) -> Dict[str, float]:
+        """Train for one epoch with real environment rollouts"""
+        logger.info(f"\n{'='*30} EPOCH {epoch} {'='*30}")
+        
+        epoch_stats = {
+            'epoch': epoch,
+            'trajectories_collected': 0,
+            'total_reward': 0.0,
+            'avg_reward': 0.0,
+            'policy_loss': 0.0,
+            'value_loss': 0.0,
+            'kl_divergence': 0.0,
+            'failed_episodes': 0,
+            'successful_episodes': 0
+        }
+        
+        batch_size = self.configs['training'].get('batch_size', 4)
+        
+        # Collect trajectories for this epoch
+        logger.info(f"Collecting {batch_size} trajectories...")
+        
+        try:
+            trajectories = await self.trajectory_collector.collect_batch(
+                tasks=self.train_data[:batch_size],  # Use first batch_size tasks
+                batch_timeout=180.0  # 3 minute timeout per batch
+            )
+            
+            epoch_stats['trajectories_collected'] = len(trajectories)
+            
+            # Convert EpisodeResult to Trajectory objects for GRPO
+            grpo_trajectories = []
+            for episode_result in trajectories:
+                if episode_result.is_valid():
+                    # Convert EpisodeResult to Trajectory format
+                    trajectory = Trajectory(
+                        task_id=episode_result.task_id,
+                        states=[],  # Will be populated from trajectory data
+                        actions=[], 
+                        rewards=[],
+                        dones=[],
+                        log_probs=None,
+                        values=None
+                    )
+                    
+                    # Extract data from episode trajectory
+                    for step in episode_result.trajectory:
+                        trajectory.actions.append(step.get('action', ''))
+                        trajectory.rewards.append(step.get('reward', 0.0))
+                        trajectory.dones.append(step.get('done', False))
+                        trajectory.states.append(step.get('state', []))
+                    
+                    # Set total reward and length
+                    trajectory.total_reward = sum(trajectory.rewards) 
+                    trajectory.length = len(trajectory.actions)
+                    
+                    grpo_trajectories.append(trajectory)
+            
+            epoch_stats['trajectories_collected'] = len(grpo_trajectories)
+            
+            # Calculate trajectory statistics  
+            rewards = [traj.total_reward for traj in grpo_trajectories]
+            epoch_stats['total_reward'] = sum(rewards)
+            epoch_stats['avg_reward'] = np.mean(rewards) if rewards else 0.0
+            
+            # Count successes/failures
+            for traj in grpo_trajectories:
+                if traj.total_reward > 0.5:  # Success threshold
+                    epoch_stats['successful_episodes'] += 1
+                else:
+                    epoch_stats['failed_episodes'] += 1
+            
+            logger.info(f"Collected {len(grpo_trajectories)} trajectories")
+            logger.info(f"Average reward: {epoch_stats['avg_reward']:.3f}")
+            logger.info(f"Success rate: {epoch_stats['successful_episodes']}/{len(grpo_trajectories)}")
+            
+            # Train the policy with GRPO
+            if len(grpo_trajectories) > 0:
+                logger.info("Training policy with GRPO...")
+                
+                # Train with GRPO trajectories
+                training_metrics = self.trainer.train_step(grpo_trajectories)
+                
+                # Update epoch stats with training metrics
+                epoch_stats.update({
+                    'policy_loss': training_metrics.get('policy_loss', 0.0),
+                    'value_loss': training_metrics.get('value_loss', 0.0), 
+                    'kl_divergence': training_metrics.get('kl_divergence', 0.0)
+                })
+                
+                self.global_step += 1
+                
+                # Log to WandB
+                wandb_metrics = {
+                    'train/epoch': epoch,
+                    'train/avg_reward': epoch_stats['avg_reward'],
+                    'train/total_reward': epoch_stats['total_reward'],
+                    'train/success_rate': epoch_stats['successful_episodes'] / len(grpo_trajectories),
+                    'train/policy_loss': epoch_stats['policy_loss'],
+                    'train/value_loss': epoch_stats['value_loss'],
+                    'train/kl_divergence': epoch_stats['kl_divergence'],
+                    'train/trajectories_collected': epoch_stats['trajectories_collected'],
+                    'trainer/global_step': self.global_step
+                }
+                
+                self._log_wandb(wandb_metrics, step=self.global_step, commit=True)
+                
+                logger.info(f"Training metrics - Policy Loss: {epoch_stats['policy_loss']:.4f}, "
+                           f"Value Loss: {epoch_stats['value_loss']:.4f}, "
+                           f"KL Div: {epoch_stats['kl_divergence']:.4f}")
+            
+        except Exception as e:
+            logger.error(f"Error during training epoch {epoch}: {e}")
+            epoch_stats['failed_episodes'] = batch_size
+            
+            # Still log the failure
+            self._log_wandb({
+                'train/epoch': epoch,
+                'train/error': 1,
+                'train/avg_reward': 0.0,
+                'trainer/global_step': self.global_step
+            }, step=self.global_step, commit=True)
+        
+        return epoch_stats
+    
     async def train(self):
         """Main training loop with REAL environment rollouts"""
         logger.info("\n" + "="*50)
@@ -868,8 +1008,14 @@ class RealEnvironmentGRPOTrainer:
             # Train
             epoch_stats = await self.train_epoch(epoch)
             
-            # Evaluate
-            eval_stats = await self.evaluate(epoch)
+            # Evaluate (optional - skip if no validation data)
+            try:
+                if hasattr(self, 'valid_data') and self.valid_data:
+                    eval_stats = await self.evaluate(epoch)
+                else:
+                    logger.info("Skipping evaluation - no validation data available")
+            except Exception as e:
+                logger.warning(f"Evaluation failed: {e}")
             
             # Save checkpoint
             if epoch % self.configs['training'].get('save_every', 1) == 0:
