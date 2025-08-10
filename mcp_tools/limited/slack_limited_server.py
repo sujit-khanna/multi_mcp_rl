@@ -14,7 +14,11 @@ from mcp.server import Server
 from mcp.types import Tool, TextContent
 
 from dotenv import load_dotenv
-load_dotenv('../../.env', override=True)
+import pathlib
+# Get the project root (two levels up from this file)
+project_root = pathlib.Path(__file__).parent.parent.parent
+env_path = project_root / '.env'
+load_dotenv(env_path, override=True)
 
 try:
     from slack_sdk.web.async_client import AsyncWebClient

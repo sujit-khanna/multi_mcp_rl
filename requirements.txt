@@ -28,6 +28,10 @@ polygon-api-client>=1.15.0
 slack-sdk>=3.36.0
 tavily-python>=0.7.0
 
+
+pip3 install skyrl-gym
+
 # Testing (optional)
 pytest>=7.4.0
 pytest-asyncio>=0.21.0
+

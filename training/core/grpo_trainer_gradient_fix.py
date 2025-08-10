@@ -91,20 +91,31 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
             all_advantages = []
             all_old_log_probs = []
             
-            for traj in trajectories:
+            for traj_idx, traj in enumerate(trajectories):
                 all_states.extend(traj.states)
                 all_actions.extend(traj.actions)
                 all_advantages.extend([traj.advantages[i] for i in range(traj.length)])
-                
-                if hasattr(traj, 'old_log_probs') and traj.old_log_probs is not None:
-                    # Ensure old_log_probs are tensors
-                    for lp in traj.old_log_probs:
-                        if isinstance(lp, torch.Tensor):
-                            all_old_log_probs.append(lp)
-                        else:
-                            all_old_log_probs.append(torch.tensor(float(lp), device=self.device))
-                else:
-                    raise ValueError("Trajectory missing old_log_probs")
+
+                # Robust handling of missing or incomplete old_log_probs.
+                # If absent, compute them on-the-fly using the policy for the
+                # original (pre-update) states/actions.
+                if getattr(traj, 'old_log_probs', None) is None or len(traj.old_log_probs) != len(traj.actions):
+                    try:
+                        with torch.no_grad():
+                            computed = self.policy.compute_log_probs(traj.states, traj.actions)
+                        # Persist back to the trajectory for transparency and future steps
+                        traj.old_log_probs = [p for p in computed]
+                    except Exception as compute_err:
+                        raise ValueError(
+                            f"Trajectory missing old_log_probs and recomputation failed at index {traj_idx}: {type(compute_err).__name__}: {compute_err}"
+                        )
+
+                # At this point traj.old_log_probs must exist and align with actions
+                for lp in traj.old_log_probs:
+                    if isinstance(lp, torch.Tensor):
+                        all_old_log_probs.append(lp)
+                    else:
+                        all_old_log_probs.append(torch.tensor(float(lp), device=self.device))
             
             # Convert to tensors
             old_log_probs = torch.stack(all_old_log_probs)

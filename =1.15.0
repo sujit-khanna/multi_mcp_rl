@@ -1,0 +1,18 @@
+Requirement already satisfied: polygon-api-client in /Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages (1.14.2)
+Collecting certifi<2025.0.0,>=2022.5.18 (from polygon-api-client)
+  Using cached certifi-2024.12.14-py3-none-any.whl.metadata (2.3 kB)
+Requirement already satisfied: urllib3<3.0.0,>=1.26.9 in /Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages (from polygon-api-client) (2.3.0)
+Collecting websockets<13.0,>=10.3 (from polygon-api-client)
+  Using cached websockets-12.0-cp311-cp311-macosx_11_0_arm64.whl.metadata (6.6 kB)
+Using cached certifi-2024.12.14-py3-none-any.whl (164 kB)
+Using cached websockets-12.0-cp311-cp311-macosx_11_0_arm64.whl (121 kB)
+Installing collected packages: websockets, certifi
+  Attempting uninstall: websockets
+    Found existing installation: websockets 14.2
+    Uninstalling websockets-14.2:
+      Successfully uninstalled websockets-14.2
+  Attempting uninstall: certifi
+    Found existing installation: certifi 2025.1.31
+    Uninstalling certifi-2025.1.31:
+      Successfully uninstalled certifi-2025.1.31
+Successfully installed certifi-2024.12.14 websockets-12.0

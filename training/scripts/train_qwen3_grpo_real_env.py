@@ -50,9 +50,9 @@ if env_path not in sys.path:
     sys.path.insert(0, env_path)
 
 # Import with proper module handling
-import mcp_tool_environment
-from mcp_tool_environment_with_logging import MCPToolEnvironmentWithLogging
-from simple_shared_manager import SimpleSharedManager
+import environments.mcp_tool_environment as mcp_tool_environment
+from environments.mcp_tool_environment_with_logging import MCPToolEnvironmentWithLogging
+from environments.simple_shared_manager import SimpleSharedManager
 
 # Set up logging
 logging.basicConfig(

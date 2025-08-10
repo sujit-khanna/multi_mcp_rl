@@ -31,8 +31,9 @@ import sys
 from pathlib import Path
 
 import logging
-# Add SkyRL paths
-skyrl_gym_path = str(Path.home() / "Desktop/ongoing_projects/cooking_time_rl/SkyRL/skyrl-gym")
+# Add SkyRL paths (using local installation)
+project_root = Path(__file__).parent.parent
+skyrl_gym_path = str(project_root / "SkyRL" / "skyrl-gym")
 if skyrl_gym_path not in sys.path:
     sys.path.insert(0, skyrl_gym_path)
 

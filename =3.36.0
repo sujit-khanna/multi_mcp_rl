@@ -1,0 +1,6 @@
+Collecting slack-sdk
+  Downloading slack_sdk-3.36.0-py2.py3-none-any.whl.metadata (15 kB)
+Downloading slack_sdk-3.36.0-py2.py3-none-any.whl (293 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 293.9/293.9 kB 1.1 MB/s eta 0:00:00
+Installing collected packages: slack-sdk
+Successfully installed slack-sdk-3.36.0
