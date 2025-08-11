@@ -154,3 +154,82 @@ class QwenPolicyWithValuePrompting(QwenPolicyWithPrompting):
             logger.info(f"Loaded value head from {value_head_path}")
         else:
             logger.warning(f"Value head checkpoint not found at {value_head_path}")
+    
+    def state_dict(self):
+        """Get state dictionary including model and value head."""
+        state_dict = {}
+        
+        # Add model state dict
+        if hasattr(self.model, 'state_dict'):
+            model_state = self.model.state_dict()
+            for key, value in model_state.items():
+                state_dict[f'model.{key}'] = value
+        
+        # Add value head state dict
+        value_state = self.value_head.state_dict()
+        for key, value in value_state.items():
+            state_dict[f'value_head.{key}'] = value
+            
+        return state_dict
+    
+    def load_state_dict(self, state_dict, strict=True):
+        """Load state dictionary for model and value head."""
+        model_state = {}
+        value_state = {}
+        
+        for key, value in state_dict.items():
+            if key.startswith('model.'):
+                model_key = key[6:]  # Remove 'model.' prefix
+                model_state[model_key] = value
+            elif key.startswith('value_head.'):
+                value_key = key[11:]  # Remove 'value_head.' prefix
+                value_state[value_key] = value
+        
+        missing_keys = []
+        unexpected_keys = []
+        
+        # Load model state
+        if model_state and hasattr(self.model, 'load_state_dict'):
+            result = self.model.load_state_dict(model_state, strict=strict)
+            if result is not None:
+                if isinstance(result, tuple):
+                    missing_keys.extend([f'model.{k}' for k in result[0]])
+                    unexpected_keys.extend([f'model.{k}' for k in result[1]])
+        
+        # Load value head state
+        if value_state:
+            result = self.value_head.load_state_dict(value_state, strict=strict)
+            if result is not None:
+                if isinstance(result, tuple):
+                    missing_keys.extend([f'value_head.{k}' for k in result[0]])
+                    unexpected_keys.extend([f'value_head.{k}' for k in result[1]])
+        
+        return missing_keys, unexpected_keys
+    
+    def parameters(self):
+        """Get all trainable parameters from model and value head."""
+        params = []
+        
+        # Add model parameters
+        if hasattr(self.model, 'parameters'):
+            params.extend(list(self.model.parameters()))
+        
+        # Add value head parameters
+        params.extend(list(self.value_head.parameters()))
+        
+        return iter(params)
+    
+    def named_parameters(self):
+        """Get all named parameters from model and value head."""
+        named_params = []
+        
+        # Add model parameters
+        if hasattr(self.model, 'named_parameters'):
+            for name, param in self.model.named_parameters():
+                named_params.append((f'model.{name}', param))
+        
+        # Add value head parameters
+        for name, param in self.value_head.named_parameters():
+            named_params.append((f'value_head.{name}', param))
+        
+        return iter(named_params)

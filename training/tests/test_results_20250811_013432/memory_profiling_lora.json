@@ -1,0 +1,56 @@
+{
+  "success": false,
+  "return_code": 1,
+  "stdout": "",
+  "stderr": "Traceback (most recent call last):\n  File \"/home/ubuntu/multi_mcp_rl/training/tests/memory_profile.py\", line 36, in <module>\n    from core.qwen_policy import QwenPolicy, estimate_memory_usage\n  File \"/home/ubuntu/multi_mcp_rl/training/core/__init__.py\", line 12, in <module>\n    from .environment_adapter import (\n  File \"/home/ubuntu/multi_mcp_rl/training/core/environment_adapter.py\", line 38, in <module>\n    from environments.real_tool_manager import RealMCPToolManager\n  File \"/home/ubuntu/multi_mcp_rl/environments/real_tool_manager.py\", line 22, in <module>\n    from mcp import ClientSession, StdioServerParameters\nModuleNotFoundError: No module named 'mcp'\n",
+  "command": "/home/ubuntu/multi_mcp_rl/venv312/bin/python /home/ubuntu/multi_mcp_rl/training/tests/memory_profile.py --mode lora --quick",
+  "memory_profile_data": {
+    "metadata": {
+      "mode": "lora",
+      "device": "cuda",
+      "timestamp": 1754782785.0241053,
+      "total_system_memory_gb": 216.2584228515625,
+      "baseline_memory_gb": 0.0
+    },
+    "results": [
+      {
+        "sequence_length": 512,
+        "batch_size": 1,
+        "gradient_accumulation_steps": 1,
+        "mode": "lora",
+        "device": "cuda",
+        "start_memory_gb": 0.0,
+        "success": false,
+        "error": "Runtime error: Only Tensors created explicitly by the user (graph leaves) support the deepcopy protocol at the moment.  If you were attempting to deepcopy a module, this may be because of a torch.nn.utils.weight_norm usage, see https://github.com/pytorch/pytorch/pull/103001",
+        "peak_memory_gb": 0.0,
+        "model_memory_gb": 5.826162815093994,
+        "training_memory_gb": 0.0,
+        "memory_per_sample": 0.0,
+        "recommended_batch_size": 0
+      },
+      {
+        "sequence_length": 1024,
+        "batch_size": 1,
+        "gradient_accumulation_steps": 1,
+        "mode": "lora",
+        "device": "cuda",
+        "start_memory_gb": 0.008056640625,
+        "success": false,
+        "error": "Runtime error: Only Tensors created explicitly by the user (graph leaves) support the deepcopy protocol at the moment.  If you were attempting to deepcopy a module, this may be because of a torch.nn.utils.weight_norm usage, see https://github.com/pytorch/pytorch/pull/103001",
+        "peak_memory_gb": 0.0,
+        "model_memory_gb": 5.824697971343994,
+        "training_memory_gb": 0.0,
+        "memory_per_sample": 0.0,
+        "recommended_batch_size": 0
+      }
+    ],
+    "recommendations": {
+      "error": "No successful configurations found"
+    }
+  },
+  "successful_configurations": 0,
+  "total_configurations_tested": 2,
+  "test_name": "memory_profiling_lora",
+  "timestamp": 1754876080.0539088,
+  "duration": 7.384502410888672
+}

@@ -1,4 +1,4 @@
-device_map: null
+device_map: auto
 generation:
   do_sample: true
   eos_token_id: 151645
@@ -24,13 +24,13 @@ lora_mode:
   - gate_proj
   - up_proj
   - down_proj
-max_length: 1024
+max_length: 2048
 memory_optimization:
-  device_map: null
+  device_map: auto
   load_in_4bit: false
   load_in_8bit: false
   low_cpu_mem_usage: true
-  torch_dtype: float32
+  torch_dtype: float16
   trust_remote_code: true
 model_name: Qwen/Qwen2.5-0.5B-Instruct
 quantization:
@@ -42,5 +42,5 @@ stop_sequences:
 - </think>
 - <|im_end|>
 tokenizer_name: Qwen/Qwen2.5-0.5B-Instruct
-torch_dtype: float32
+torch_dtype: float16
 trust_remote_code: true

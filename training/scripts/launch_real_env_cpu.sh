@@ -13,7 +13,10 @@ cd "$ROOT_DIR"
 echo "Working directory: $(pwd)"
 
 # Activate virtual environment if it exists
-if [ -f "$ROOT_DIR/.venv/bin/activate" ]; then
+if [ -d "$ROOT_DIR/venv312" ]; then
+    source "$ROOT_DIR/venv312/bin/activate"
+    echo "Python 3.12 virtual environment activated"
+elif [ -f "$ROOT_DIR/.venv/bin/activate" ]; then
     source "$ROOT_DIR/.venv/bin/activate"
     echo "Virtual environment activated"
 fi
@@ -24,6 +27,13 @@ export PYTHONDONTWRITEBYTECODE=1
 export TOKENIZERS_PARALLELISM=false
 export DEVICE_TYPE="cpu"  # FORCE CPU to avoid MPS issues
 export DISABLE_BITSANDBYTES=1  # Force disable BitsAndBytes
+
+# CRITICAL FIXES: Environment variables for RL training improvements
+export FORCE_RATE="0.0"                    # Disable forcing during RL updates
+export ASSIST_WARMUP="0"                   # No warmup steps  
+export RL_DISABLE_FORCED="1"               # Disable forced actions in RL
+export PPO_RECORD_AT_SAMPLE="1"            # Record log-probs at sampling time
+export STRICT_TRAJ_KEYS="1"                # Strict trajectory key validation
 
 # Load environment variables from .env
 if [ -f "$ROOT_DIR/.env" ]; then
@@ -38,9 +48,11 @@ elif [ -f "$ROOT_DIR/../.env" ]; then
     echo "Parent .env file loaded"
 fi
 
-# WandB configuration (optional)
-export WANDB_PROJECT="skyrl-grpo-real-env"
+# WandB configuration - FIXED PROJECT
+export WANDB_PROJECT="multi-mcp-rl-fixed"
 export WANDB_MODE="online"  # Set to "offline" to disable wandb
+export WANDB_TAGS="cpu,grpo,real-env,fixed,critical-fixes"
+export WEAVE_PROJECT="synergia_Agents/multi-mcp-rl-fixed"
 
 # Create output directory with timestamp
 OUTPUT_DIR="outputs/real-env-grpo-cpu-$(date +%Y%m%d-%H%M%S)"

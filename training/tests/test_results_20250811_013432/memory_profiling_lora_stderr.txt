@@ -1,0 +1,10 @@
+Traceback (most recent call last):
+  File "/home/ubuntu/multi_mcp_rl/training/tests/memory_profile.py", line 36, in <module>
+    from core.qwen_policy import QwenPolicy, estimate_memory_usage
+  File "/home/ubuntu/multi_mcp_rl/training/core/__init__.py", line 12, in <module>
+    from .environment_adapter import (
+  File "/home/ubuntu/multi_mcp_rl/training/core/environment_adapter.py", line 38, in <module>
+    from environments.real_tool_manager import RealMCPToolManager
+  File "/home/ubuntu/multi_mcp_rl/environments/real_tool_manager.py", line 22, in <module>
+    from mcp import ClientSession, StdioServerParameters
+ModuleNotFoundError: No module named 'mcp'

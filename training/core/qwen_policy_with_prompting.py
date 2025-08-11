@@ -13,11 +13,18 @@ logger = logging.getLogger(__name__)
 class QwenPolicyWithPrompting(QwenPolicy):
     """QwenPolicy with additional prompting for untrained models."""
     
-    def __init__(self, *args, **kwargs):
-        """Initialize with deterministic counter for action forcing."""
+    def __init__(self, *args, force_rate: float = 0.0, assist_warmup_steps: int = 0, **kwargs):
+        """Initialize with configurable forcing for RL vs warmup phases."""
         super().__init__(*args, **kwargs)
         self.action_counter = 0  # Deterministic counter for forcing decisions
-        self.force_rate = 0.8  # 80% forcing rate
+        self.force_rate = force_rate  # Configurable forcing rate (0.0 for RL)
+        self.assist_warmup_steps = assist_warmup_steps
+        self.in_rl_update = True  # Set by trainer during RL phases
+        
+        # Environment variable overrides
+        import os
+        self.force_rate = float(os.getenv('FORCE_RATE', str(self.force_rate)))
+        self.assist_warmup_steps = int(os.getenv('ASSIST_WARMUP', str(self.assist_warmup_steps)))
     
     TOOL_CALLING_PROMPT = """You are a specialized AI assistant that MUST use tools to answer questions. You cannot answer questions without using the appropriate tools first.
 
@@ -33,7 +40,7 @@ Available tools:
 - polygon_get_news: Get stock news
 - tavily_search: Web search
 - execute_python: Run Python code
-- slack_send_message: Send messages
+- send_slack_message: Send messages
 
 MANDATORY EXAMPLES - Study these patterns:
 
@@ -141,6 +148,92 @@ Your first response MUST be a tool call."""
                 processed_actions.append(action)
         
         return processed_actions
+    
+    def sample_with_logprobs(self, states: List[List[Dict[str, str]]], max_new_tokens: int = 100) -> tuple:
+        """
+        Generate actions and return both actions and their log probabilities at sampling time.
+        This enables proper PPO ratio computation by capturing log-probs at the moment of sampling.
+        """
+        formatted_inputs = []
+        for state in states:
+            formatted = self.format_conversation(state)
+            formatted_inputs.append(formatted)
+        
+        # Tokenize inputs
+        inputs = self.tokenizer(
+            formatted_inputs,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=self.model_config["max_length"]
+        ).to(self.device)
+        
+        # Generate with proper log-prob tracking
+        actions = []
+        all_log_probs = []
+        
+        # Check if environment flag is set for recording at sample time
+        import os
+        record_at_sample = os.getenv("PPO_RECORD_AT_SAMPLE", "1") == "1"
+        
+        if record_at_sample:
+            # True PPO: record log-probs at sampling time
+            with torch.no_grad():
+                for i in range(len(formatted_inputs)):
+                    input_ids = inputs['input_ids'][i:i+1]
+                    attention_mask = inputs['attention_mask'][i:i+1]
+                    
+                    # Generate step by step to capture log-probs
+                    generated_tokens = []
+                    step_log_probs = []
+                    
+                    current_input_ids = input_ids
+                    current_attention_mask = attention_mask
+                    
+                    for step in range(max_new_tokens):
+                        outputs = self.model(current_input_ids, attention_mask=current_attention_mask)
+                        logits = outputs.logits[:, -1, :]  # Last token logits
+                        
+                        # Apply temperature
+                        logits = logits / self.generation_config.get('temperature', 0.7)
+                        log_probs = torch.log_softmax(logits, dim=-1)
+                        
+                        # Sample next token
+                        if self.generation_config.get('do_sample', True):
+                            next_token = torch.multinomial(torch.softmax(logits, dim=-1), 1)
+                        else:
+                            next_token = torch.argmax(logits, dim=-1, keepdim=True)
+                        
+                        # Get log prob of sampled token
+                        token_log_prob = log_probs.gather(-1, next_token).squeeze(-1)
+                        step_log_probs.append(token_log_prob)
+                        generated_tokens.append(next_token)
+                        
+                        # Check for stopping
+                        if next_token.item() in [self.tokenizer.eos_token_id, self.tokenizer.pad_token_id]:
+                            break
+                        
+                        # Update inputs for next step
+                        current_input_ids = torch.cat([current_input_ids, next_token], dim=-1)
+                        current_attention_mask = torch.cat([current_attention_mask, torch.ones_like(next_token)], dim=-1)
+                    
+                    # Convert tokens to text
+                    if generated_tokens:
+                        generated_text = self.tokenizer.decode(torch.cat(generated_tokens, dim=-1)[0], skip_special_tokens=True)
+                        actions.append(generated_text)
+                        # Sum log probs for sequence
+                        total_log_prob = torch.stack(step_log_probs).sum()
+                        all_log_probs.append(total_log_prob)
+                    else:
+                        actions.append("")
+                        all_log_probs.append(torch.tensor(0.0, device=self.device))
+        else:
+            # Fallback to standard generation
+            actions = self.generate_action(states, max_new_tokens=max_new_tokens)
+            # Compute log-probs after the fact (less accurate for PPO)
+            all_log_probs = self.compute_log_probs(states, actions)
+        
+        return actions, all_log_probs
     
     def _generate_forced_tool_call(self, context: str) -> str:
         """Generate an appropriate tool call based on context and expected tools"""

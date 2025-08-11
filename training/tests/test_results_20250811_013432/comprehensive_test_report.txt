@@ -1,0 +1,34 @@
+GRPO TRAINING PIPELINE - COMPREHENSIVE TEST RESULTS
+============================================================
+
+Test Suite: GRPO Training Pipeline Comprehensive Tests
+Timestamp: 2025-08-11T01:34:42.001587
+Duration: 9.3 seconds
+Results Directory: /home/ubuntu/multi_mcp_rl/training/tests/test_results_20250811_013432
+
+SUMMARY:
+  Total Tests: 6
+  Successful: 2
+  Failed: 4
+  Success Rate: 33.3%
+
+INDIVIDUAL TEST RESULTS:
+----------------------------------------
+system_info: ✅ PASS
+
+existing_results: ✅ PASS
+
+file_structure_validation: ❌ FAIL
+  Summary: Some validations failed
+
+minimal_components: ❌ FAIL
+  Summary: Some minimal tests failed
+
+memory_profiling_lora: ❌ FAIL
+
+smoke_test_lora: ❌ FAIL
+  Summary: Smoke test execution failed
+
+OVERALL ASSESSMENT:
+--------------------
+❌ NEEDS WORK: Significant issues need to be resolved.

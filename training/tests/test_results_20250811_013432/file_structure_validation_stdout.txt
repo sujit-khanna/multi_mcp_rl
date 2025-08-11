@@ -1,0 +1,75 @@
+🔥 GRPO Training Structure Validation
+==================================================
+🔍 Validating file structure...
+  ✅ core/__init__.py
+  ✅ core/qwen_policy.py
+  ✅ core/grpo_trainer.py
+  ✅ data/__init__.py
+  ✅ data/data_loader.py
+  ✅ data/trajectory_collector.py
+  ✅ configs/model_config.yaml
+  ✅ configs/training_config.yaml
+  ✅ configs/grpo_config.yaml
+  ✅ configs/accelerate_config.yaml
+  ✅ configs/deepspeed_config.json
+  ✅ scripts/__init__.py
+  ✅ scripts/train_grpo.py
+  ✅ tests/smoke_test.py
+  ✅ tests/memory_profile.py
+
+File structure validation: 15/15 files found
+✅ All expected files present
+
+🔍 Validating imports...
+  ❌ core.qwen_policy: import failed - No module named 'mcp'
+  ❌ core.grpo_trainer: import failed - No module named 'mcp'
+  ✅ data.data_loader: all classes available
+  ✅ data.trajectory_collector: all classes available
+
+Import validation: 2/4 modules imported successfully
+❌ Failed imports: [('core.qwen_policy', "No module named 'mcp'"), ('core.grpo_trainer', "No module named 'mcp'")]
+
+🔍 Validating configuration files...
+  ✅ configs/model_config.yaml: valid yaml
+  ✅ configs/training_config.yaml: valid yaml
+  ✅ configs/grpo_config.yaml: valid yaml
+  ✅ configs/accelerate_config.yaml: valid yaml
+  ✅ configs/deepspeed_config.json: valid json
+
+Configuration validation: 5/5 files valid
+✅ All configuration files valid
+
+🔍 Validating component instantiation...
+  ✅ LRUCache instantiated and working
+  ✅ CurriculumSampler instantiated and working
+  ✅ TaskBatcher instantiated and working
+
+❌ Component instantiation failed: No module named 'mcp'
+Traceback (most recent call last):
+  File "/home/ubuntu/multi_mcp_rl/training/tests/validate_structure.py", line 197, in validate_component_instantiation
+    from core.grpo_trainer import Trajectory
+  File "/home/ubuntu/multi_mcp_rl/training/core/__init__.py", line 12, in <module>
+    from .environment_adapter import (
+  File "/home/ubuntu/multi_mcp_rl/training/core/environment_adapter.py", line 38, in <module>
+    from environments.real_tool_manager import RealMCPToolManager
+  File "/home/ubuntu/multi_mcp_rl/environments/real_tool_manager.py", line 22, in <module>
+    from mcp import ClientSession, StdioServerParameters
+ModuleNotFoundError: No module named 'mcp'
+
+
+🔍 Validating training script...
+  ✅ train_grpo.py is syntactically valid
+
+============================================================
+VALIDATION SUMMARY
+============================================================
+  File Structure: ✅ PASS
+  Module Imports: ❌ FAIL
+  Configuration Files: ✅ PASS
+  Component Instantiation: ❌ FAIL
+  Training Script: ✅ PASS
+
+Overall: 3/5 validations passed
+
+⚠️  2 validation(s) failed
+❌ Some components need attention before training

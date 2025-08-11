@@ -1,0 +1,13 @@
+
+============================================================
+MINIMAL TEST RESULTS
+============================================================
+  Imports: ❌ FAIL
+  Data Components: ✅ PASS
+  Trajectory Components: ❌ FAIL
+  Configuration Handling: ✅ PASS
+  Device Detection: ✅ PASS
+  Memory Monitoring: ✅ PASS
+
+Summary: 4/6 tests passed
+⚠️  Some tests failed.

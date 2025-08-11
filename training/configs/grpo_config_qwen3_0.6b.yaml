@@ -8,12 +8,12 @@ kl_penalty: 0.1  # KL divergence penalty coefficient
 clip_range: 0.2  # PPO-style clipping range
 
 # Rollout settings
-rollout_batch_size: 4  # Number of tasks per rollout batch
-rollout_parallel_envs: 2  # Parallel environments for collection
-rollout_timeout_seconds: 180  # 3 minutes per batch
-max_episode_length: 10  # Shorter for 0.6B model
+rollout_batch_size: 1  # Single task for debugging
+rollout_parallel_envs: 1  # Single environment to avoid conflicts
+rollout_timeout_seconds: 900  # 15 minutes per batch - very generous
+max_episode_length: 8   # Reasonable episode length
 retry_failed_episodes: true
-max_retries: 2
+max_retries: 5  # Lots of retries for debugging
 
 # Group comparison settings
 group_size: 4  # Number of rollouts per task for comparison
@@ -26,8 +26,8 @@ advantage_type: "gae"  # Generalized Advantage Estimation
 normalize_advantages: true
 advantage_epsilon: 1e-8
 
-# Reference policy updates
-reference_update_interval: 5000  # Update reference every 5k steps
+# Reference policy updates  
+reference_update_interval: 100  # Update reference every 100 steps (more frequent)
 reference_ema_decay: 0.99  # Exponential moving average
 
 # Reward shaping

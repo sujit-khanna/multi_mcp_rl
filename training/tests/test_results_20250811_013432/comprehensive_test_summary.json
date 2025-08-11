@@ -1,0 +1,268 @@
+{
+  "test_suite": "GRPO Training Pipeline Comprehensive Tests",
+  "timestamp": "2025-08-11T01:34:42.001587",
+  "duration_seconds": 9.332176923751831,
+  "total_tests": 6,
+  "successful_tests": 2,
+  "failed_tests": 4,
+  "success_rate": 33.33333333333333,
+  "results_directory": "/home/ubuntu/multi_mcp_rl/training/tests/test_results_20250811_013432",
+  "individual_results": {
+    "system_info": {
+      "success": true,
+      "system_info": {
+        "platform": "Linux-6.8.0-60-generic-x86_64-with-glibc2.35",
+        "python_version": "3.12.11",
+        "pytorch_version": "2.7.0+cpu",
+        "cuda_available": false,
+        "mps_available": false,
+        "total_memory_gb": 216.25843048095703,
+        "available_memory_gb": 212.70405960083008
+      },
+      "test_name": "system_info",
+      "timestamp": 1754876073.951062,
+      "duration": 1.2816553115844727
+    },
+    "existing_results": {
+      "success": true,
+      "existing_results": {
+        "memory_profile_lora": {
+          "file_path": "/home/ubuntu/multi_mcp_rl/training/tests/memory_profile_lora.json",
+          "data": {
+            "metadata": {
+              "mode": "lora",
+              "device": "cuda",
+              "timestamp": 1754782785.0241053,
+              "total_system_memory_gb": 216.2584228515625,
+              "baseline_memory_gb": 0.0
+            },
+            "results": [
+              {
+                "sequence_length": 512,
+                "batch_size": 1,
+                "gradient_accumulation_steps": 1,
+                "mode": "lora",
+                "device": "cuda",
+                "start_memory_gb": 0.0,
+                "success": false,
+                "error": "Runtime error: Only Tensors created explicitly by the user (graph leaves) support the deepcopy protocol at the moment.  If you were attempting to deepcopy a module, this may be because of a torch.nn.utils.weight_norm usage, see https://github.com/pytorch/pytorch/pull/103001",
+                "peak_memory_gb": 0.0,
+                "model_memory_gb": 5.826162815093994,
+                "training_memory_gb": 0.0,
+                "memory_per_sample": 0.0,
+                "recommended_batch_size": 0
+              },
+              {
+                "sequence_length": 1024,
+                "batch_size": 1,
+                "gradient_accumulation_steps": 1,
+                "mode": "lora",
+                "device": "cuda",
+                "start_memory_gb": 0.008056640625,
+                "success": false,
+                "error": "Runtime error: Only Tensors created explicitly by the user (graph leaves) support the deepcopy protocol at the moment.  If you were attempting to deepcopy a module, this may be because of a torch.nn.utils.weight_norm usage, see https://github.com/pytorch/pytorch/pull/103001",
+                "peak_memory_gb": 0.0,
+                "model_memory_gb": 5.824697971343994,
+                "training_memory_gb": 0.0,
+                "memory_per_sample": 0.0,
+                "recommended_batch_size": 0
+              }
+            ],
+            "recommendations": {
+              "error": "No successful configurations found"
+            }
+          },
+          "modified_time": 1754874428.946913
+        },
+        "mcp_integration_test_results": {
+          "file_path": "/home/ubuntu/multi_mcp_rl/training/tests/mcp_integration_test_results.json",
+          "data": {
+            "test_suite": "MCP Integration Test",
+            "timestamp": 1754152252.3871229,
+            "tests": {
+              "server_availability": {
+                "success": true,
+                "details": {
+                  "python_execution_server.py": true,
+                  "fmp_limited_server.py": true,
+                  "polygon_limited_server.py": true,
+                  "slack_limited_server.py": true,
+                  "tavily_limited_server.py": true
+                }
+              },
+              "environment_import": {
+                "success": true
+              },
+              "python_execution_server": {
+                "success": true
+              },
+              "tool_manager": {
+                "success": true
+              },
+              "training_integration": {
+                "success": true
+              }
+            },
+            "summary": {
+              "duration_seconds": 1.8014721870422363,
+              "total_tests": 5,
+              "successful_tests": 5,
+              "success_rate": 100.0,
+              "overall_success": true
+            }
+          },
+          "modified_time": 1754874428.9459128
+        },
+        "quick_memory_test_results": {
+          "file_path": "/home/ubuntu/multi_mcp_rl/training/tests/quick_memory_test_results.json",
+          "data": {
+            "test_suite": "Quick Memory Test",
+            "timestamp": 1754151262.149856,
+            "system_info": {
+              "platform": "macOS-14.3-arm64-arm-64bit",
+              "python_version": "3.12.0",
+              "pytorch_version": "2.7.1",
+              "device_info": {
+                "cuda": {
+                  "available": false
+                },
+                "mps": {
+                  "available": true,
+                  "device_name": "Apple Silicon GPU"
+                }
+              },
+              "memory": {
+                "total_gb": 64.0,
+                "available_gb": 15.619033813476562,
+                "used_percent": 75.6
+              }
+            },
+            "tests": {
+              "memory_monitoring": {
+                "device": "mps",
+                "initial_memory_gb": 0.0,
+                "peak_memory_gb": 0.00018715858459472656,
+                "final_memory_gb": 3.743171691894531e-05,
+                "memory_allocated_gb": 0.00018715858459472656,
+                "memory_freed_gb": 0.00014972686767578125,
+                "success": true
+              },
+              "configuration": {
+                "config_serialization": true,
+                "config_file_size": 156,
+                "success": true
+              },
+              "device_detection": {
+                "success": true,
+                "device": "mps",
+                "tensor_device": "mps:0",
+                "device_match": false
+              }
+            },
+            "summary": {
+              "duration_seconds": 0.0773618221282959,
+              "total_tests": 3,
+              "successful_tests": 3,
+              "success_rate": 100.0,
+              "overall_success": true
+            }
+          },
+          "modified_time": 1754874428.946913
+        }
+      },
+      "files_found": 3,
+      "test_name": "existing_results",
+      "timestamp": 1754876073.952254,
+      "duration": 1.2828474044799805
+    },
+    "file_structure_validation": {
+      "success": false,
+      "return_code": 1,
+      "stdout": "\ud83d\udd25 GRPO Training Structure Validation\n==================================================\n\ud83d\udd0d Validating file structure...\n  \u2705 core/__init__.py\n  \u2705 core/qwen_policy.py\n  \u2705 core/grpo_trainer.py\n  \u2705 data/__init__.py\n  \u2705 data/data_loader.py\n  \u2705 data/trajectory_collector.py\n  \u2705 configs/model_config.yaml\n  \u2705 configs/training_config.yaml\n  \u2705 configs/grpo_config.yaml\n  \u2705 configs/accelerate_config.yaml\n  \u2705 configs/deepspeed_config.json\n  \u2705 scripts/__init__.py\n  \u2705 scripts/train_grpo.py\n  \u2705 tests/smoke_test.py\n  \u2705 tests/memory_profile.py\n\nFile structure validation: 15/15 files found\n\u2705 All expected files present\n\n\ud83d\udd0d Validating imports...\n  \u274c core.qwen_policy: import failed - No module named 'mcp'\n  \u274c core.grpo_trainer: import failed - No module named 'mcp'\n  \u2705 data.data_loader: all classes available\n  \u2705 data.trajectory_collector: all classes available\n\nImport validation: 2/4 modules imported successfully\n\u274c Failed imports: [('core.qwen_policy', \"No module named 'mcp'\"), ('core.grpo_trainer', \"No module named 'mcp'\")]\n\n\ud83d\udd0d Validating configuration files...\n  \u2705 configs/model_config.yaml: valid yaml\n  \u2705 configs/training_config.yaml: valid yaml\n  \u2705 configs/grpo_config.yaml: valid yaml\n  \u2705 configs/accelerate_config.yaml: valid yaml\n  \u2705 configs/deepspeed_config.json: valid json\n\nConfiguration validation: 5/5 files valid\n\u2705 All configuration files valid\n\n\ud83d\udd0d Validating component instantiation...\n  \u2705 LRUCache instantiated and working\n  \u2705 CurriculumSampler instantiated and working\n  \u2705 TaskBatcher instantiated and working\n\n\u274c Component instantiation failed: No module named 'mcp'\nTraceback (most recent call last):\n  File \"/home/ubuntu/multi_mcp_rl/training/tests/validate_structure.py\", line 197, in validate_component_instantiation\n    from core.grpo_trainer import Trajectory\n  File \"/home/ubuntu/multi_mcp_rl/training/core/__init__.py\", line 12, in <module>\n    from .environment_adapter import (\n  File \"/home/ubuntu/multi_mcp_rl/training/core/environment_adapter.py\", line 38, in <module>\n    from environments.real_tool_manager import RealMCPToolManager\n  File \"/home/ubuntu/multi_mcp_rl/environments/real_tool_manager.py\", line 22, in <module>\n    from mcp import ClientSession, StdioServerParameters\nModuleNotFoundError: No module named 'mcp'\n\n\n\ud83d\udd0d Validating training script...\n  \u2705 train_grpo.py is syntactically valid\n\n============================================================\nVALIDATION SUMMARY\n============================================================\n  File Structure: \u2705 PASS\n  Module Imports: \u274c FAIL\n  Configuration Files: \u2705 PASS\n  Component Instantiation: \u274c FAIL\n  Training Script: \u2705 PASS\n\nOverall: 3/5 validations passed\n\n\u26a0\ufe0f  2 validation(s) failed\n\u274c Some components need attention before training\n",
+      "stderr": "WARNING:mcp_tool_environment:Environment registration failed: An environment with name `mcp_tool_env` is already registered (id=`mcp_tool_env`). Environment names must be unique.\nINFO:data.data_loader:CurriculumSampler initialized: {'easy': 0.3, 'medium': 0.5, 'hard': 0.2} -> {'easy': 0.1, 'medium': 0.4, 'hard': 0.5}\nINFO:data.data_loader:TaskBatcher initialized: target_turns=64, max_batch=16\n",
+      "command": "/home/ubuntu/multi_mcp_rl/venv312/bin/python /home/ubuntu/multi_mcp_rl/training/tests/validate_structure.py",
+      "validation_summary": "Some validations failed",
+      "test_name": "file_structure_validation",
+      "timestamp": 1754876076.0509994,
+      "duration": 3.3815927505493164
+    },
+    "minimal_components": {
+      "success": false,
+      "return_code": 1,
+      "stdout": "\n============================================================\nMINIMAL TEST RESULTS\n============================================================\n  Imports: \u274c FAIL\n  Data Components: \u2705 PASS\n  Trajectory Components: \u274c FAIL\n  Configuration Handling: \u2705 PASS\n  Device Detection: \u2705 PASS\n  Memory Monitoring: \u2705 PASS\n\nSummary: 4/6 tests passed\n\u26a0\ufe0f  Some tests failed.\n",
+      "stderr": "INFO:__main__:\ud83d\udd25 Running minimal GRPO component tests...\nINFO:__main__:\n--- Testing Imports ---\nINFO:__main__:Testing imports...\nINFO:environments.mcp_tool_environment:\u2705 MCPToolEnvironment registered with SkyRL\nERROR:__main__:\u274c QwenPolicy import failed: No module named 'mcp'\nINFO:__main__:\n--- Testing Data Components ---\nINFO:__main__:Testing data components...\nINFO:__main__:\u2705 LRU Cache working correctly\nINFO:data.data_loader:CurriculumSampler initialized: {'easy': 0.3, 'medium': 0.5, 'hard': 0.2} -> {'easy': 0.1, 'medium': 0.4, 'hard': 0.5}\nINFO:__main__:\u2705 Curriculum Sampler working correctly\nINFO:data.data_loader:TaskBatcher initialized: target_turns=16, max_batch=4\nINFO:__main__:\u2705 Task Batcher working correctly\nINFO:__main__:\n--- Testing Trajectory Components ---\nINFO:__main__:Testing trajectory components...\nERROR:__main__:\u274c Trajectory components test failed: No module named 'mcp'\nINFO:__main__:\n--- Testing Configuration Handling ---\nINFO:__main__:Testing configuration handling...\nINFO:__main__:\u2705 Configuration handling working correctly\nINFO:__main__:\n--- Testing Device Detection ---\nINFO:__main__:Testing device detection...\nINFO:__main__:\u2705 Using CPU: cpu\nINFO:__main__:\u2705 Device detection and tensor operations working correctly\nINFO:__main__:\n--- Testing Memory Monitoring ---\nINFO:__main__:Testing memory monitoring...\nINFO:__main__:\u2705 Memory monitoring working: 0.28GB -> 0.28GB\n",
+      "command": "/home/ubuntu/multi_mcp_rl/venv312/bin/python /home/ubuntu/multi_mcp_rl/training/tests/minimal_test.py",
+      "test_summary": "Some minimal tests failed",
+      "test_name": "minimal_components",
+      "timestamp": 1754876078.0845406,
+      "duration": 5.415133953094482
+    },
+    "memory_profiling_lora": {
+      "success": false,
+      "return_code": 1,
+      "stdout": "",
+      "stderr": "Traceback (most recent call last):\n  File \"/home/ubuntu/multi_mcp_rl/training/tests/memory_profile.py\", line 36, in <module>\n    from core.qwen_policy import QwenPolicy, estimate_memory_usage\n  File \"/home/ubuntu/multi_mcp_rl/training/core/__init__.py\", line 12, in <module>\n    from .environment_adapter import (\n  File \"/home/ubuntu/multi_mcp_rl/training/core/environment_adapter.py\", line 38, in <module>\n    from environments.real_tool_manager import RealMCPToolManager\n  File \"/home/ubuntu/multi_mcp_rl/environments/real_tool_manager.py\", line 22, in <module>\n    from mcp import ClientSession, StdioServerParameters\nModuleNotFoundError: No module named 'mcp'\n",
+      "command": "/home/ubuntu/multi_mcp_rl/venv312/bin/python /home/ubuntu/multi_mcp_rl/training/tests/memory_profile.py --mode lora --quick",
+      "memory_profile_data": {
+        "metadata": {
+          "mode": "lora",
+          "device": "cuda",
+          "timestamp": 1754782785.0241053,
+          "total_system_memory_gb": 216.2584228515625,
+          "baseline_memory_gb": 0.0
+        },
+        "results": [
+          {
+            "sequence_length": 512,
+            "batch_size": 1,
+            "gradient_accumulation_steps": 1,
+            "mode": "lora",
+            "device": "cuda",
+            "start_memory_gb": 0.0,
+            "success": false,
+            "error": "Runtime error: Only Tensors created explicitly by the user (graph leaves) support the deepcopy protocol at the moment.  If you were attempting to deepcopy a module, this may be because of a torch.nn.utils.weight_norm usage, see https://github.com/pytorch/pytorch/pull/103001",
+            "peak_memory_gb": 0.0,
+            "model_memory_gb": 5.826162815093994,
+            "training_memory_gb": 0.0,
+            "memory_per_sample": 0.0,
+            "recommended_batch_size": 0
+          },
+          {
+            "sequence_length": 1024,
+            "batch_size": 1,
+            "gradient_accumulation_steps": 1,
+            "mode": "lora",
+            "device": "cuda",
+            "start_memory_gb": 0.008056640625,
+            "success": false,
+            "error": "Runtime error: Only Tensors created explicitly by the user (graph leaves) support the deepcopy protocol at the moment.  If you were attempting to deepcopy a module, this may be because of a torch.nn.utils.weight_norm usage, see https://github.com/pytorch/pytorch/pull/103001",
+            "peak_memory_gb": 0.0,
+            "model_memory_gb": 5.824697971343994,
+            "training_memory_gb": 0.0,
+            "memory_per_sample": 0.0,
+            "recommended_batch_size": 0
+          }
+        ],
+        "recommendations": {
+          "error": "No successful configurations found"
+        }
+      },
+      "successful_configurations": 0,
+      "total_configurations_tested": 2,
+      "test_name": "memory_profiling_lora",
+      "timestamp": 1754876080.0539088,
+      "duration": 7.384502410888672
+    },
+    "smoke_test_lora": {
+      "success": false,
+      "return_code": 1,
+      "stdout": "",
+      "stderr": "Traceback (most recent call last):\n  File \"/home/ubuntu/multi_mcp_rl/training/tests/smoke_test.py\", line 34, in <module>\n    from core.qwen_policy import QwenPolicy\n  File \"/home/ubuntu/multi_mcp_rl/training/core/__init__.py\", line 12, in <module>\n    from .environment_adapter import (\n  File \"/home/ubuntu/multi_mcp_rl/training/core/environment_adapter.py\", line 38, in <module>\n    from environments.real_tool_manager import RealMCPToolManager\n  File \"/home/ubuntu/multi_mcp_rl/environments/real_tool_manager.py\", line 22, in <module>\n    from mcp import ClientSession, StdioServerParameters\nModuleNotFoundError: No module named 'mcp'\n",
+      "command": "/home/ubuntu/multi_mcp_rl/venv312/bin/python /home/ubuntu/multi_mcp_rl/training/tests/smoke_test.py --mode lora --skip_model_tests",
+      "smoke_test_summary": "Smoke test execution failed",
+      "test_name": "smoke_test_lora",
+      "timestamp": 1754876082.001102,
+      "duration": 9.331695556640625
+    }
+  }
+}

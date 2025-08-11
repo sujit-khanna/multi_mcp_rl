@@ -126,11 +126,11 @@ class SimpleSharedMCPToolManager:
                 env_vars = dict(os.environ)
                 env_vars.update(dotenv_values(str(ENV_PATH)))
                 
+                # Use absolute path to server and current Python executable
                 params = StdioServerParameters(
                     command=sys.executable,
-                    args=[os.path.basename(server_path)],
-                    env=env_vars,
-                    cwd=os.path.dirname(server_path)
+                    args=[server_path],
+                    env=env_vars
                 )
                 
                 # Use the same pattern as working RealMCPToolManager
@@ -204,11 +204,11 @@ class SimpleSharedMCPToolManager:
         env_vars = dict(os.environ)
         env_vars.update(dotenv_values(str(ENV_PATH)))
         
+        # Use absolute path to server and current Python executable
         params = StdioServerParameters(
             command=sys.executable,
-            args=[os.path.basename(server_path)],
-            env=env_vars,
-            cwd=os.path.dirname(server_path)
+            args=[server_path],
+            env=env_vars
         )
         
         try:

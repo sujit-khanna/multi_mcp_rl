@@ -206,10 +206,10 @@ class MCPToolEnvironment(BaseTextEnv):
     
     async def initialize_tools(self):
         """Initialize MCP tool manager asynchronously"""
-        from .tool_manager import MCPToolManager
-        self.tool_manager = MCPToolManager()
+        from .simple_shared_manager import SimpleSharedMCPToolManager
+        self.tool_manager = SimpleSharedMCPToolManager()
         await self.tool_manager.initialize()
-        self.available_tools = self.tool_manager.get_available_tools()
+        self.available_tools = list(self.tool_manager.available_tools.keys())
         logger.info(f"Initialized {len(self.available_tools)} tools")
     
     def step(self, action: str) -> BaseTextEnvStepOutput:

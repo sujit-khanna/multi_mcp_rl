@@ -1,0 +1,10 @@
+Traceback (most recent call last):
+  File "/home/ubuntu/multi_mcp_rl/training/tests/smoke_test.py", line 34, in <module>
+    from core.qwen_policy import QwenPolicy
+  File "/home/ubuntu/multi_mcp_rl/training/core/__init__.py", line 12, in <module>
+    from .environment_adapter import (
+  File "/home/ubuntu/multi_mcp_rl/training/core/environment_adapter.py", line 38, in <module>
+    from environments.real_tool_manager import RealMCPToolManager
+  File "/home/ubuntu/multi_mcp_rl/environments/real_tool_manager.py", line 22, in <module>
+    from mcp import ClientSession, StdioServerParameters
+ModuleNotFoundError: No module named 'mcp'

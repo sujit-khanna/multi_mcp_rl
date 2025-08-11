@@ -218,8 +218,8 @@ class RealEnvironmentGRPOTrainer:
         """Setup WandB and Weave logging"""
         if self.use_wandb:
             wandb.init(
-                project=os.environ.get('WANDB_PROJECT', 'skyrl-grpo-real-env'),
-                name=f"grpo-real-env-{time.strftime('%Y%m%d-%H%M%S')}",
+                project=os.environ.get('WANDB_PROJECT', 'multi-mcp-rl-fixed'),
+                name=f"grpo-fixed-env-{time.strftime('%Y%m%d-%H%M%S')}",
                 config={
                     **self.configs.get('grpo', {}),
                     **self.configs.get('training', {}),
@@ -229,18 +229,46 @@ class RealEnvironmentGRPOTrainer:
                     'phase1_fixes': ['value_function', 'ref_policy_updates', 'gradient_clipping']
                 }
             )
-            # Define a consistent step metric so charts align by training step
+            # Define comprehensive metric structure for proper WandB dashboards
             try:
+                # Primary step counter
                 wandb.define_metric('trainer/step')
-                wandb.define_metric('trainer/*', step_metric='trainer/step')
-                wandb.define_metric('rollouts/*', step_metric='trainer/step')
+                wandb.define_metric('trainer/global_step')
+                
+                # Core training metrics
+                wandb.define_metric('training/*', step_metric='trainer/step')
+                wandb.define_metric('training/total_loss', summary='min')
+                wandb.define_metric('training/policy_loss', summary='min') 
+                wandb.define_metric('training/value_loss', summary='min')
+                wandb.define_metric('training/kl_divergence', summary='last')
+                
+                # PPO/GRPO specific metrics
+                wandb.define_metric('ppo/*', step_metric='trainer/step')
+                wandb.define_metric('ppo/ratio_mean', summary='last')
+                
+                # Episode/trajectory metrics
+                wandb.define_metric('episodes/*', step_metric='trainer/step')
+                wandb.define_metric('episodes/reward_mean', summary='max')
+                wandb.define_metric('episodes/success_rate', summary='max')
+                
+                # Advantage metrics
+                wandb.define_metric('advantages/*', step_metric='trainer/step')
+                
+                # System metrics
+                wandb.define_metric('system/*', step_metric='trainer/step')
+                
+                # Evaluation metrics
                 wandb.define_metric('eval/*', step_metric='trainer/step')
-            except Exception:
-                pass
+                wandb.define_metric('eval/avg_reward', summary='max')
+                wandb.define_metric('eval/success_rate', summary='max')
+                
+                logger.info("✅ WandB metric definitions configured for comprehensive logging")
+            except Exception as e:
+                logger.warning(f"Failed to setup WandB metric definitions: {e}")
             logger.info("WandB logging initialized")
         
         if self.use_weave:
-            weave.init(project_name=os.environ.get('WEAVE_PROJECT', 'skyrl-grpo-real-env'))
+            weave.init(project_name=os.environ.get('WEAVE_PROJECT', 'synergia_Agents/multi-mcp-rl-fixed'))
             logger.info("Weave logging initialized")
 
     def _log_wandb(self, payload: dict, step: int, commit: bool = True) -> None:
@@ -250,6 +278,7 @@ class RealEnvironmentGRPOTrainer:
         """
         if not self.use_wandb:
             return
+        
         safe = {}
         for k, v in payload.items():
             try:
@@ -264,11 +293,117 @@ class RealEnvironmentGRPOTrainer:
                         safe[k] = v
             except Exception:
                 continue
+        
+        # Add step counter
         safe['trainer/step'] = int(step)
+        safe['trainer/global_step'] = int(step)
+        
         try:
-            wandb.log(safe, commit=commit)
+            wandb.log(safe, step=step, commit=commit)
+            logger.debug(f"✅ WandB logged {len(safe)} metrics at step {step}")
         except Exception as e:
-            logger.warning(f"Failed to log to WandB: {e}")
+            logger.warning(f"❌ Failed to log to WandB: {e}")
+    
+    def _log_comprehensive_training_metrics(self, training_metrics: dict, trajectories: list, step: int):
+        """Log comprehensive training metrics to ensure visibility of training progress"""
+        
+        # Core training metrics
+        core_metrics = {
+            'training/total_loss': training_metrics.get('total_loss', 0.0),
+            'training/policy_loss': training_metrics.get('policy_loss', 0.0),
+            'training/value_loss': training_metrics.get('value_loss', 0.0),
+            'training/kl_divergence': training_metrics.get('kl_divergence', 0.0),
+            'training/kl_penalty': training_metrics.get('kl_penalty', 0.0),
+            'training/entropy_loss': training_metrics.get('entropy_loss', 0.0),
+            'training/grad_norm': training_metrics.get('grad_norm', 0.0),
+            'training/learning_rate': getattr(self.trainer.optimizer, 'param_groups', [{}])[0].get('lr', 0.0) if hasattr(self.trainer, 'optimizer') else 0.0,
+        }
+        
+        # PPO/GRPO specific metrics
+        ppo_metrics = {
+            'ppo/ratio_mean': training_metrics.get('avg_ratio', 1.0),
+            'ppo/ratio_max': training_metrics.get('max_ratio', 1.0),
+            'ppo/ratio_min': training_metrics.get('min_ratio', 1.0),
+            'ppo/kl_coef': training_metrics.get('kl_coef', 0.1),
+        }
+        
+        # Advantage metrics
+        advantage_metrics = {
+            'advantages/mean': training_metrics.get('avg_advantage', 0.0),
+            'advantages/std': training_metrics.get('std_advantage', 0.0),
+        }
+        
+        # Trajectory/Episode metrics
+        if trajectories:
+            episode_rewards = [traj.total_reward for traj in trajectories if hasattr(traj, 'total_reward')]
+            episode_lengths = [traj.length for traj in trajectories if hasattr(traj, 'length')]
+            
+            episode_metrics = {
+                'episodes/count': len(trajectories),
+                'episodes/reward_mean': np.mean(episode_rewards) if episode_rewards else 0.0,
+                'episodes/reward_std': np.std(episode_rewards) if episode_rewards else 0.0,
+                'episodes/reward_min': np.min(episode_rewards) if episode_rewards else 0.0,
+                'episodes/reward_max': np.max(episode_rewards) if episode_rewards else 0.0,
+                'episodes/length_mean': np.mean(episode_lengths) if episode_lengths else 0.0,
+                'episodes/success_rate': np.mean([1.0 if r > 0.5 else 0.0 for r in episode_rewards]) if episode_rewards else 0.0,
+            }
+        else:
+            episode_metrics = {
+                'episodes/count': 0,
+                'episodes/reward_mean': 0.0,
+                'episodes/success_rate': 0.0,
+            }
+        
+        # System metrics
+        system_metrics = {
+            'system/epoch': self.current_epoch if hasattr(self, 'current_epoch') else 0,
+            'system/step': step,
+        }
+        
+        if torch.cuda.is_available():
+            try:
+                system_metrics.update({
+                    'system/gpu_memory_allocated_gb': torch.cuda.memory_allocated() / (1024**3),
+                    'system/gpu_memory_reserved_gb': torch.cuda.memory_reserved() / (1024**3),
+                    'system/gpu_memory_utilization': torch.cuda.memory_allocated() / torch.cuda.max_memory_allocated(),
+                })
+            except Exception:
+                pass
+        
+        # Combine all metrics
+        all_metrics = {
+            **core_metrics,
+            **ppo_metrics,
+            **advantage_metrics, 
+            **episode_metrics,
+            **system_metrics
+        }
+        
+        # Log to WandB with step
+        self._log_wandb(all_metrics, step=step, commit=True)
+        
+        # Also log to Weave if available
+        if self.use_weave and HAS_WEAVE:
+            try:
+                weave.log({
+                    'step': step,
+                    'metrics': all_metrics,
+                    'timestamp': time.time(),
+                    'phase': 'training'
+                })
+            except Exception as e:
+                logger.debug(f"Weave logging failed: {e}")
+        
+        # Log key metrics to console for immediate feedback
+        logger.info(f"📊 STEP {step:4d} | "
+                   f"Loss: {core_metrics['training/total_loss']:.4f} | "
+                   f"Policy: {core_metrics['training/policy_loss']:.4f} | " 
+                   f"Value: {core_metrics['training/value_loss']:.4f} | "
+                   f"KL: {core_metrics['training/kl_divergence']:.4f} | "
+                   f"Reward: {episode_metrics['episodes/reward_mean']:.3f} | "
+                   f"Success: {episode_metrics['episodes/success_rate']:.2%}")
+        
+        return all_metrics
     
     def load_data(self):
         """Load training and validation data"""
@@ -401,25 +536,17 @@ class RealEnvironmentGRPOTrainer:
             value_head_hidden_dim=value_head_hidden_dim
         )
         
-        # Copy initial weights to reference policy
+        # Copy initial weights to reference policy using robust sync
         logger.info("Synchronizing reference policy weights...")
-        with torch.no_grad():
-            for ref_param, param in zip(
-                self.reference_policy.model.parameters(),
-                self.policy.model.parameters()
-            ):
-                ref_param.data.copy_(param.data)
-            
-            # Also sync value heads
-            for ref_param, param in zip(
-                self.reference_policy.value_head.parameters(),
-                self.policy.value_head.parameters()
-            ):
-                ref_param.data.copy_(param.data)
+        # The sync method will be added by the trainer setup
         
         # Enable training mode for policy, eval mode for reference
         self.policy.enable_training_mode()
         self.reference_policy.enable_eval_mode()
+        
+        # CRITICAL FIX: Set RL update mode to disable forced actions
+        self.policy.in_rl_update = True
+        logger.info("✅ Policy configured for RL mode (no forced actions)")
         
         # Update device to match actual policy device (in case of fallback)
         self.device = self.policy.device
@@ -469,6 +596,10 @@ class RealEnvironmentGRPOTrainer:
                 log_graph=False
             )
             logger.info("✅ WandB gradient tracking enabled for policy and value head")
+        
+        # CRITICAL FIX: Perform initial reference policy sync
+        diffs = self.trainer.sync_reference_policy()
+        logger.info(f"✅ Initial reference policy sync completed: {diffs} parameter differences")
     
     async def setup_environment(self):
         """Setup shared tool manager and trajectory collector"""
@@ -614,8 +745,15 @@ class RealEnvironmentGRPOTrainer:
                     rewards=rewards,
                     dones=dones
                 )
-                # Store old log probs for GRPO
-                traj.old_log_probs = old_log_probs
+                # Store log probs for GRPO (using key expected by trainer)
+                traj.log_probs = old_log_probs  # CRITICAL FIX: Use 'log_probs' not 'old_log_probs'
+                
+                # Also store forced mask if available
+                if hasattr(self.policy, 'last_forced_mask') and self.policy.last_forced_mask:
+                    forced_mask_tensor = torch.tensor(self.policy.last_forced_mask[:len(old_log_probs)], dtype=torch.bool, device=self.device)
+                    traj.forced_mask = forced_mask_tensor
+                else:
+                    traj.forced_mask = torch.zeros(len(old_log_probs), dtype=torch.bool, device=self.device)
                 
                 trajectories.append(traj)
         
@@ -691,51 +829,42 @@ class RealEnvironmentGRPOTrainer:
             try:
                 metrics = self.trainer.train_step(trajectories)
                 
-                # Update metrics
+                # COMPREHENSIVE LOGGING: Log all training metrics to WandB/Weave
+                comprehensive_metrics = self._log_comprehensive_training_metrics(
+                    training_metrics=metrics,
+                    trajectories=trajectories, 
+                    step=self.global_step
+                )
+                
+                # Update local epoch metrics for summary
                 for key in ['policy_loss', 'value_loss', 'kl_divergence', 'grad_norm']:
                     if key in metrics:
                         epoch_metrics[key].append(metrics[key])
                 
-                # Track trajectory statistics
+                # Track trajectory statistics  
                 trajectory_rewards = [traj.total_reward for traj in trajectories]
                 trajectory_lengths = [traj.length for traj in trajectories]
                 epoch_metrics['rewards'].extend(trajectory_rewards)
                 epoch_metrics['trajectory_lengths'].extend(trajectory_lengths)
                 
-                # Update progress bar
+                # Update progress bar with key metrics
                 progress_bar.set_postfix({
-                    'loss': f"{metrics.get('total_loss', 0):.4f}",
+                    'total_loss': f"{metrics.get('total_loss', 0):.4f}",
+                    'policy_loss': f"{metrics.get('policy_loss', 0):.4f}",
+                    'value_loss': f"{metrics.get('value_loss', 0):.4f}",
                     'kl': f"{metrics.get('kl_divergence', 0):.4f}",
-                    'reward': f"{np.mean(trajectory_rewards):.3f}"
+                    'reward': f"{np.mean(trajectory_rewards):.3f}",
+                    'success': f"{np.mean([1.0 if r > 0.5 else 0.0 for r in trajectory_rewards]):.2%}" if trajectory_rewards else "0%"
                 })
                 
-                # Log to WandB with clear namespaces
-                rollout_log = {
-                    'rollouts/avg_reward': np.mean(trajectory_rewards) if trajectory_rewards else 0,
-                    'rollouts/avg_length': np.mean(trajectory_lengths) if trajectory_lengths else 0,
-                    'rollouts/min_reward': np.min(trajectory_rewards) if trajectory_rewards else 0,
-                    'rollouts/max_reward': np.max(trajectory_rewards) if trajectory_rewards else 0,
-                    'rollouts/num_trajectories': len(trajectories),
-                }
-                trainer_log = {
-                    'trainer/total_loss': metrics.get('total_loss', 0),
-                    'trainer/policy_loss': metrics.get('policy_loss', 0),
-                    'trainer/value_loss': metrics.get('value_loss', 0),
-                    'trainer/kl_divergence': metrics.get('kl_divergence', 0),
-                    'trainer/kl_coef': metrics.get('kl_coef', 0),
-                    'trainer/avg_advantage': metrics.get('avg_advantage', 0),
-                    'trainer/std_advantage': metrics.get('std_advantage', 0),
-                    'trainer/learning_rate': self.trainer.optimizer.param_groups[0]['lr'],
-                    'trainer/epoch': int(epoch),
-                }
-                # Useful system traces
-                system_log = {
-                    'system/gpu_memory_allocated': (torch.cuda.memory_allocated() / (1024**3)) if torch.cuda.is_available() else 0,
-                    'system/gpu_memory_reserved': (torch.cuda.memory_reserved() / (1024**3)) if torch.cuda.is_available() else 0,
-                }
-                self._log_wandb({**rollout_log, **trainer_log, **system_log}, step=self.global_step, commit=True)
-                
                 self.global_step += 1
+                
+                # CRITICAL FIX: Update reference policy periodically
+                ref_update_freq = self.configs['grpo'].get('reference_update_interval', 100)
+                if self.global_step % ref_update_freq == 0:
+                    diffs = self.trainer.sync_reference_policy()
+                    logger.info(f"🔄 Reference policy updated at step {self.global_step}: {diffs} param differences")
+                    self._log_wandb({'trainer/ref_policy_sync_step': self.global_step}, step=self.global_step)
                 
                 # Clear MPS cache every N steps
                 if self.device.type == 'mps' and torch.backends.mps.is_available():
@@ -815,9 +944,28 @@ class RealEnvironmentGRPOTrainer:
             self.best_eval_score = eval_metrics['eval_avg_reward']
             self.save_checkpoint('best_model', is_best=True)
         
+        # Comprehensive evaluation logging
         eval_log = {f'eval/{k}': v for k, v in eval_metrics.items()}
-        eval_log['trainer/epoch'] = int(epoch)
+        eval_log.update({
+            'eval/step': self.global_step,
+            'eval/epoch': int(epoch),
+            'eval/is_best': 1.0 if eval_metrics['eval_avg_reward'] > self.best_eval_score else 0.0,
+            'eval/improvement': eval_metrics['eval_avg_reward'] - self.best_eval_score,
+        })
+        
         self._log_wandb(eval_log, step=self.global_step, commit=True)
+        
+        # Also log to Weave
+        if self.use_weave and HAS_WEAVE:
+            try:
+                weave.log({
+                    'step': self.global_step,
+                    'evaluation_metrics': eval_log,
+                    'timestamp': time.time(),
+                    'phase': 'evaluation'
+                })
+            except Exception as e:
+                logger.debug(f"Weave eval logging failed: {e}")
         
         return eval_metrics
     
@@ -946,6 +1094,13 @@ class RealEnvironmentGRPOTrainer:
                 # Train with GRPO trajectories
                 training_metrics = self.trainer.train_step(grpo_trajectories)
                 
+                # COMPREHENSIVE LOGGING: Use the same comprehensive logging
+                comprehensive_metrics = self._log_comprehensive_training_metrics(
+                    training_metrics=training_metrics,
+                    trajectories=grpo_trajectories,
+                    step=self.global_step
+                )
+                
                 # Update epoch stats with training metrics
                 epoch_stats.update({
                     'policy_loss': training_metrics.get('policy_loss', 0.0),
@@ -954,21 +1109,6 @@ class RealEnvironmentGRPOTrainer:
                 })
                 
                 self.global_step += 1
-                
-                # Log to WandB
-                wandb_metrics = {
-                    'train/epoch': epoch,
-                    'train/avg_reward': epoch_stats['avg_reward'],
-                    'train/total_reward': epoch_stats['total_reward'],
-                    'train/success_rate': epoch_stats['successful_episodes'] / len(grpo_trajectories),
-                    'train/policy_loss': epoch_stats['policy_loss'],
-                    'train/value_loss': epoch_stats['value_loss'],
-                    'train/kl_divergence': epoch_stats['kl_divergence'],
-                    'train/trajectories_collected': epoch_stats['trajectories_collected'],
-                    'trainer/global_step': self.global_step
-                }
-                
-                self._log_wandb(wandb_metrics, step=self.global_step, commit=True)
                 
                 logger.info(f"Training metrics - Policy Loss: {epoch_stats['policy_loss']:.4f}, "
                            f"Value Loss: {epoch_stats['value_loss']:.4f}, "

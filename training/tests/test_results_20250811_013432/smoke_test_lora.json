@@ -1,0 +1,11 @@
+{
+  "success": false,
+  "return_code": 1,
+  "stdout": "",
+  "stderr": "Traceback (most recent call last):\n  File \"/home/ubuntu/multi_mcp_rl/training/tests/smoke_test.py\", line 34, in <module>\n    from core.qwen_policy import QwenPolicy\n  File \"/home/ubuntu/multi_mcp_rl/training/core/__init__.py\", line 12, in <module>\n    from .environment_adapter import (\n  File \"/home/ubuntu/multi_mcp_rl/training/core/environment_adapter.py\", line 38, in <module>\n    from environments.real_tool_manager import RealMCPToolManager\n  File \"/home/ubuntu/multi_mcp_rl/environments/real_tool_manager.py\", line 22, in <module>\n    from mcp import ClientSession, StdioServerParameters\nModuleNotFoundError: No module named 'mcp'\n",
+  "command": "/home/ubuntu/multi_mcp_rl/venv312/bin/python /home/ubuntu/multi_mcp_rl/training/tests/smoke_test.py --mode lora --skip_model_tests",
+  "smoke_test_summary": "Smoke test execution failed",
+  "test_name": "smoke_test_lora",
+  "timestamp": 1754876082.001102,
+  "duration": 9.331695556640625
+}

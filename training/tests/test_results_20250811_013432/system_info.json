@@ -1,0 +1,15 @@
+{
+  "success": true,
+  "system_info": {
+    "platform": "Linux-6.8.0-60-generic-x86_64-with-glibc2.35",
+    "python_version": "3.12.11",
+    "pytorch_version": "2.7.0+cpu",
+    "cuda_available": false,
+    "mps_available": false,
+    "total_memory_gb": 216.25843048095703,
+    "available_memory_gb": 212.70405960083008
+  },
+  "test_name": "system_info",
+  "timestamp": 1754876073.951062,
+  "duration": 1.2816553115844727
+}

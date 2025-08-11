@@ -96,26 +96,47 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
                 all_actions.extend(traj.actions)
                 all_advantages.extend([traj.advantages[i] for i in range(traj.length)])
 
-                # Robust handling of missing or incomplete old_log_probs.
-                # If absent, compute them on-the-fly using the policy for the
-                # original (pre-update) states/actions.
-                if getattr(traj, 'old_log_probs', None) is None or len(traj.old_log_probs) != len(traj.actions):
-                    try:
+                # CRITICAL FIX: Use correct key name and fail loudly if missing
+                import os
+                strict_keys = os.getenv("STRICT_TRAJ_KEYS", "1") == "1"
+                
+                # Check for log_probs (the expected key)
+                if not hasattr(traj, 'log_probs') or traj.log_probs is None:
+                    if strict_keys:
+                        raise KeyError(
+                            f"Missing 'log_probs' on trajectory {traj_idx}. "
+                            f"Expected 'log_probs', not 'old_log_probs'. "
+                            f"Fix trajectory collection to store with correct key."
+                        )
+                    # Fallback: try old_log_probs
+                    if hasattr(traj, 'old_log_probs') and traj.old_log_probs is not None:
+                        logger.warning(f"Using deprecated 'old_log_probs' key for trajectory {traj_idx}")
+                        traj.log_probs = traj.old_log_probs
+                    else:
+                        # Compute on the fly as last resort
+                        logger.warning(f"Computing log_probs on-the-fly for trajectory {traj_idx} (suboptimal for PPO)")
                         with torch.no_grad():
                             computed = self.policy.compute_log_probs(traj.states, traj.actions)
-                        # Persist back to the trajectory for transparency and future steps
-                        traj.old_log_probs = [p for p in computed]
-                    except Exception as compute_err:
-                        raise ValueError(
-                            f"Trajectory missing old_log_probs and recomputation failed at index {traj_idx}: {type(compute_err).__name__}: {compute_err}"
-                        )
-
-                # At this point traj.old_log_probs must exist and align with actions
-                for lp in traj.old_log_probs:
+                        traj.log_probs = [p for p in computed]
+                
+                # Validate alignment
+                if len(traj.log_probs) != len(traj.actions):
+                    raise ValueError(
+                        f"Trajectory {traj_idx}: log_probs length {len(traj.log_probs)} != actions length {len(traj.actions)}"
+                    )
+                
+                # Convert to tensors
+                for lp in traj.log_probs:
                     if isinstance(lp, torch.Tensor):
                         all_old_log_probs.append(lp)
                     else:
                         all_old_log_probs.append(torch.tensor(float(lp), device=self.device))
+                
+                # Collect forced mask if available
+                if hasattr(traj, 'forced_mask') and traj.forced_mask is not None:
+                    if not hasattr(self, '_forced_masks'):
+                        self._forced_masks = []
+                    self._forced_masks.extend(traj.forced_mask.tolist())
             
             # Convert to tensors
             old_log_probs = torch.stack(all_old_log_probs)
@@ -145,6 +166,11 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
         # FIX 3.2: Remove aggressive ratio pre-clamping
         # Only clamp for numerical stability, not policy constraints
         ratios = torch.clamp(ratios, 1e-8, 1e8)  # Prevent numerical issues only
+        
+        # SANITY CHECK: Log ratio statistics
+        ratio_mean = ratios.mean().item()
+        ratio_std = ratios.std().item()
+        logger.info(f"PPO Ratio Check - mean: {ratio_mean:.3f}, std: {ratio_std:.3f}")
         
         # Compute clipped policy loss (PPO-style)
         policy_loss_unclipped = -advantages * ratios
@@ -328,6 +354,59 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
         
         return grad_norm.item() if hasattr(grad_norm, 'item') else grad_norm
     
+    def sync_reference_policy(self):
+        """
+        Robust reference policy synchronization that works with LoRA/PEFT.
+        """
+        logger.info("Synchronizing reference policy...")
+        
+        with torch.no_grad():
+            # Get source state dict (includes LoRA weights if applicable)
+            src_state = self.policy.state_dict()
+            
+            # Try to include LoRA/PEFT adapter weights explicitly
+            try:
+                from peft import get_peft_model_state_dict
+                if hasattr(self.policy, 'model') and hasattr(self.policy.model, 'peft_config'):
+                    lora_state = get_peft_model_state_dict(self.policy.model)
+                    src_state.update({k: v for k, v in lora_state.items()})
+                    logger.info(f"Included {len(lora_state)} LoRA parameters in sync")
+            except Exception as e:
+                logger.debug(f"No LoRA state to sync: {e}")
+            
+            # Load into reference policy
+            missing, unexpected = self.reference_policy.load_state_dict(src_state, strict=False)
+            
+            if missing:
+                logger.warning(f"Missing keys in reference sync: {missing}")
+            if unexpected:
+                logger.warning(f"Unexpected keys in reference sync: {unexpected}")
+        
+        # Freeze reference policy parameters
+        for param in self.reference_policy.parameters():
+            param.requires_grad_(False)
+        
+        # Verification check
+        diffs = self._count_param_diffs(self.policy, self.reference_policy)
+        logger.info(f"Reference sync check: {diffs} tensors differ (should be 0 right after sync)")
+        
+        return diffs
+    
+    def _count_param_diffs(self, model_a, model_b) -> int:
+        """Count number of parameter tensors that differ between models."""
+        diffs = 0
+        with torch.no_grad():
+            params_a = dict(model_a.named_parameters())
+            params_b = dict(model_b.named_parameters())
+            
+            for name in params_a:
+                if name in params_b:
+                    if not torch.allclose(params_a[name], params_b[name], atol=1e-6):
+                        diffs += 1
+                        logger.debug(f"Parameter diff in {name}: max_diff={torch.max(torch.abs(params_a[name] - params_b[name])).item():.6f}")
+        
+        return diffs
+    
     def get_gradient_stats(self) -> Dict[str, float]:
         """Get statistics about gradient norms."""
         if not self.grad_norm_history:
@@ -341,3 +420,80 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
             "min_grad_norm": min(recent_norms),
             "grad_norm_std": torch.std(torch.tensor(recent_norms)).item(),
         }
+    
+    def _compute_returns_advantages(self, rewards, values, dones, gamma=0.99, lam=0.95):
+        """
+        Compute returns and advantages using Generalized Advantage Estimation (GAE).
+        
+        Args:
+            rewards: Tensor [T, B] of rewards
+            values: Tensor [T+1, B] of value predictions (includes next state value)
+            dones: Tensor [T, B] of done flags (1.0 after terminal states)
+            gamma: Discount factor
+            lam: GAE lambda parameter
+            
+        Returns:
+            returns: Tensor [T, B] of returns
+            advantages: Tensor [T, B] of advantages
+        """
+        T, B = rewards.shape
+        advantages = torch.zeros_like(rewards)
+        lastgaelam = torch.zeros(B, device=rewards.device)
+        
+        # Work backwards through time
+        for t in reversed(range(T)):
+            nonterminal = 1.0 - dones[t]
+            delta = rewards[t] + gamma * values[t + 1] * nonterminal - values[t]
+            lastgaelam = delta + gamma * lam * nonterminal * lastgaelam
+            advantages[t] = lastgaelam
+        
+        # Returns are advantages + baseline
+        returns = advantages + values[:-1]  # Remove last value (next state)
+        
+        return returns, advantages
+    
+    def _compute_value_loss(self, states, returns, clip_vloss=None):
+        """
+        Compute value function loss.
+        
+        Args:
+            states: List of states
+            returns: Tensor of target returns
+            clip_vloss: Optional value clipping range
+            
+        Returns:
+            Value loss tensor
+        """
+        if not hasattr(self.policy, 'compute_values'):
+            logger.warning("Policy does not have compute_values method, skipping value loss")
+            return torch.tensor(0.0, device=self.device)
+        
+        # Compute current value predictions
+        values_pred = self.policy.compute_values(states)
+        
+        if clip_vloss is None:
+            # Simple MSE loss
+            value_loss = 0.5 * (values_pred - returns).pow(2).mean()
+        else:
+            # PPO-style clipped value loss
+            # Note: This would require old values for proper clipping
+            # For now, use simple MSE
+            value_loss = 0.5 * (values_pred - returns).pow(2).mean()
+        
+        # Log value function metrics
+        with torch.no_grad():
+            explained_var = self._compute_explained_variance(returns, values_pred)
+            logger.debug(f"Value loss: {value_loss.item():.4f}, Explained variance: {explained_var:.3f}")
+        
+        return value_loss
+    
+    def _compute_explained_variance(self, targets, predictions):
+        """Compute explained variance of value function."""
+        targets_np = targets.detach().cpu().numpy()
+        predictions_np = predictions.detach().cpu().numpy()
+        
+        var_targets = np.var(targets_np)
+        if var_targets == 0:
+            return 0.0
+        
+        return 1 - np.var(targets_np - predictions_np) / var_targets
