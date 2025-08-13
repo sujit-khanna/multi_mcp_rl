@@ -138,9 +138,9 @@ class QwenPolicy:
             self.load_in_4bit = False
             # Override model config for MPS
             max_length = self.model_config.get("max_length", 2048)
-            if max_length > 512:
-                logger.warning(f"Reducing max_length from {max_length} to 512 for MPS compatibility")
-                self.model_config["max_length"] = 512
+            if max_length > 1024:
+                logger.warning(f"Reducing max_length from {max_length} to 1024 for MPS compatibility")
+                self.model_config["max_length"] = 1024
         elif self.load_in_4bit and self.use_lora and HAS_BITSANDBYTES and torch.cuda.is_available():
             quantization_config = BitsAndBytesConfig(
                 load_in_4bit=True,
@@ -162,7 +162,7 @@ class QwenPolicy:
         
         # Set model_max_length for MPS
         if self.device.type == "mps":
-            tokenizer_kwargs["model_max_length"] = self.model_config.get("max_length", 512)
+            tokenizer_kwargs["model_max_length"] = self.model_config.get("max_length", 1024)
         
         self.tokenizer = AutoTokenizer.from_pretrained(
             self.model_config["tokenizer_name"],

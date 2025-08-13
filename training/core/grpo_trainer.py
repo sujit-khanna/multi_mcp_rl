@@ -79,12 +79,34 @@ class Trajectory:
     def to_device(self, device: torch.device) -> 'Trajectory':
         """Move tensor attributes to specified device."""
         new_traj = copy.deepcopy(self)
+        
+        # Handle log_probs - might be a list or tensor
         if self.log_probs is not None:
-            new_traj.log_probs = self.log_probs.to(device)
+            if isinstance(self.log_probs, list):
+                # Convert list to tensor if needed
+                if self.log_probs and isinstance(self.log_probs[0], torch.Tensor):
+                    new_traj.log_probs = torch.stack(self.log_probs).to(device)
+                else:
+                    # Keep as-is if not tensors
+                    new_traj.log_probs = self.log_probs
+            elif isinstance(self.log_probs, torch.Tensor):
+                new_traj.log_probs = self.log_probs.to(device)
+        
+        # Handle values
         if self.values is not None:
-            new_traj.values = self.values.to(device)
+            if isinstance(self.values, torch.Tensor):
+                new_traj.values = self.values.to(device)
+        
+        # Handle advantages
         if self.advantages is not None:
-            new_traj.advantages = self.advantages.to(device)
+            if isinstance(self.advantages, torch.Tensor):
+                new_traj.advantages = self.advantages.to(device)
+        
+        # Handle any additional tensor attributes that might exist
+        if hasattr(self, 'forced_mask') and self.forced_mask is not None:
+            if isinstance(self.forced_mask, torch.Tensor):
+                new_traj.forced_mask = self.forced_mask.to(device)
+        
         return new_traj
 
 
@@ -177,15 +199,32 @@ class GRPOTrainer:
         
         # Get learning rate based on training mode
         if self.policy.use_lora:
-            lr = self.training_config.get("lora_learning_rate", 5e-6)  # Further reduced to prevent instability
+            lr = self.training_config.get(
+                "lora_learning_rate",
+                self.training_config.get("learning_rate", 5e-6)
+            )
         else:
-            lr = self.training_config.get("full_finetune_learning_rate", 5e-6)
+            lr = self.training_config.get(
+                "full_finetune_learning_rate",
+                self.training_config.get("learning_rate", 5e-6)
+            )
+        # Coerce to float if YAML or env provided as string
+        try:
+            lr = float(lr)
+        except Exception:
+            logger.warning(f"Learning rate '{lr}' is not a float; falling back to 5e-6")
+            lr = 5e-6
         
         # Get optimizer parameters
-        weight_decay = self.training_config.get("weight_decay", 0.01)
-        adam_beta1 = self.training_config.get("adam_beta1", 0.9)
-        adam_beta2 = self.training_config.get("adam_beta2", 0.95)
-        adam_epsilon = self.training_config.get("adam_epsilon", 1e-5)
+        def _as_float(v, default):
+            try:
+                return float(v)
+            except Exception:
+                return default
+        weight_decay = _as_float(self.training_config.get("weight_decay", 0.01), 0.01)
+        adam_beta1 = _as_float(self.training_config.get("adam_beta1", 0.9), 0.9)
+        adam_beta2 = _as_float(self.training_config.get("adam_beta2", 0.95), 0.95)
+        adam_epsilon = _as_float(self.training_config.get("adam_epsilon", 1e-5), 1e-5)
         
         # Debug: Check all parameters and their gradient status
         # Include both model and value head parameters if available
@@ -241,8 +280,14 @@ class GRPOTrainer:
         """Setup learning rate scheduler."""
         
         scheduler_type = self.training_config.get("lr_scheduler_type", "cosine")
-        warmup_steps = self.training_config.get("warmup_steps", 100)
-        max_steps = self.training_config.get("max_steps", 10000)
+        try:
+            warmup_steps = int(self.training_config.get("warmup_steps", 100))
+        except Exception:
+            warmup_steps = 100
+        try:
+            max_steps = int(self.training_config.get("max_steps", 10000))
+        except Exception:
+            max_steps = 10000
         
         if scheduler_type == "cosine":
             # Warmup + Cosine annealing

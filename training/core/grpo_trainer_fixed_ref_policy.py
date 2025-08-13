@@ -50,53 +50,50 @@ class GRPOTrainerFixedRefPolicy(GRPOTrainerWithValue):
     
     def _update_reference_policy(self) -> None:
         """
-        Update reference policy using exponential moving average.
-        
-        Enhanced to:
-        - Update both model and value head parameters
-        - Log KL divergence before/after update
-        - Verify update actually happened
+        Update reference policy by copying the full policy state.
+        Includes LoRA adapter weights if present and EMA on value head.
         """
         logger.info(f"Updating reference policy at step {self.step_count}")
-        
-        # Track parameters before update for verification
-        ref_param_before = None
-        if hasattr(self.reference_policy, 'model'):
-            ref_param_before = next(self.reference_policy.model.parameters()).clone()
-        
-        # Update model parameters
+
         with torch.no_grad():
-            # Update main model parameters
-            for ref_param, current_param in zip(
-                self.reference_policy.model.parameters(),
-                self.policy.model.parameters()
-            ):
-                ref_param.data = (
-                    self.ref_ema_alpha * ref_param.data +
-                    (1 - self.ref_ema_alpha) * current_param.data
-                )
-            
-            # Update value head parameters if present
-            if hasattr(self.policy, 'value_head') and hasattr(self.reference_policy, 'value_head'):
-                for ref_param, current_param in zip(
-                    self.reference_policy.value_head.parameters(),
-                    self.policy.value_head.parameters()
-                ):
-                    ref_param.data = (
-                        self.ref_ema_alpha * ref_param.data +
-                        (1 - self.ref_ema_alpha) * current_param.data
-                    )
-                logger.info("Updated reference policy value head")
-        
-        # Verify update happened
-        if ref_param_before is not None:
-            ref_param_after = next(self.reference_policy.model.parameters())
-            param_change = (ref_param_after - ref_param_before).abs().mean().item()
-            logger.info(f"Reference policy parameter change: {param_change:.6f}")
-            
-            if param_change < 1e-8:
-                logger.warning("Reference policy parameters did not change!")
-        
+            # 1) Copy full model state (including LoRA adapters when available)
+            src = self.policy.model
+            ref = self.reference_policy.model
+            from collections import OrderedDict
+            src_sd = OrderedDict(src.state_dict())
+            try:
+                from peft import get_peft_model_state_dict  # type: ignore
+                src_sd.update(get_peft_model_state_dict(src))
+            except Exception:
+                pass
+            missing, unexpected = ref.load_state_dict(src_sd, strict=False)
+            if missing or unexpected:
+                logger.debug(f"Ref load_state_dict: missing={len(missing)}, unexpected={len(unexpected)}")
+
+            # 2) Copy value head with EMA if present
+            if hasattr(self.policy, "value_head") and hasattr(self.reference_policy, "value_head"):
+                ref_v = self.reference_policy.value_head.state_dict()
+                cur_v = self.policy.value_head.state_dict()
+                for k in ref_v:
+                    if k in cur_v:
+                        ref_v[k].copy_(self.ref_ema_alpha * ref_v[k] + (1 - self.ref_ema_alpha) * cur_v[k])
+                self.reference_policy.value_head.load_state_dict(ref_v, strict=False)
+                logger.info("Updated reference policy value head (EMA)")
+
+            # 3) Freeze reference policy parameters
+            for p in self.reference_policy.parameters():
+                p.requires_grad_(False)
+
+        # 4) Verify copy by counting differing tensors (should be 0 right after copy)
+        diffs = 0
+        with torch.no_grad():
+            cur_params = dict(self.policy.model.named_parameters())
+            for name, p_ref in self.reference_policy.model.named_parameters():
+                p_cur = cur_params.get(name)
+                if p_cur is not None and not torch.allclose(p_ref, p_cur, atol=1e-6):
+                    diffs += 1
+        logger.info(f"Reference sync done — tensors_differ={diffs} (should be 0 right after copy)")
+
         self.ref_updates_count += 1
         logger.info(f"Reference policy update #{self.ref_updates_count} completed")
     

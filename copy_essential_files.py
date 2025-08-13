@@ -66,6 +66,7 @@ def copy_essential_files():
             "training/core/qwen_policy_with_prompting.py", 
             "training/core/qwen_policy_with_value_prompting.py",
             "training/core/grpo_trainer.py",
+            "training/core/grpo_trainer_with_value.py",
             "training/core/grpo_trainer_fixed_ref_policy.py",
             "training/core/grpo_trainer_gradient_fix.py",
         ],

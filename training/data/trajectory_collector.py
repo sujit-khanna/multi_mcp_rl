@@ -179,7 +179,7 @@ class TrajectoryCollector:
     async def collect_batch(
         self,
         tasks: List[Dict[str, Any]],
-        batch_timeout: float = 300.0,  # 5 minutes timeout per batch
+        batch_timeout: float = 3600.0,  # 1 hour timeout per batch
     ) -> List[EpisodeResult]:
         """
         Collect a batch of trajectories in parallel.

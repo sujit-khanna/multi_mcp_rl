@@ -8,6 +8,7 @@ BEFORE clipping them, otherwise the clipping has no effect.
 
 import logging
 import torch
+import numpy as np
 from torch.cuda.amp import GradScaler
 from typing import Dict, List, Optional, Any
 
@@ -157,34 +158,46 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
             logger.error(f"Error in data collection phase: {type(e).__name__}: {e}")
             raise
         
-        # Compute policy ratios with numerical stability
-        log_ratios = current_log_probs - old_log_probs
-        # Clamp log ratios to prevent exp() overflow
-        log_ratios = torch.clamp(log_ratios, min=-20.0, max=2.0)
-        ratios = torch.exp(log_ratios)
-        
-        # FIX 3.2: Remove aggressive ratio pre-clamping
-        # Only clamp for numerical stability, not policy constraints
-        ratios = torch.clamp(ratios, 1e-8, 1e8)  # Prevent numerical issues only
-        
+        # Apply forced mask to keep PPO on-policy
+        forced_list = getattr(self, '_forced_masks', None)
+        if forced_list is not None and len(forced_list) == len(old_log_probs):
+            forced_mask = torch.tensor(forced_list, dtype=torch.bool, device=self.device)
+        else:
+            forced_mask = torch.zeros_like(old_log_probs, dtype=torch.bool)
+
+        unforced_mask = ~forced_mask
+
+        # Compute policy ratios with numerical stability on unforced steps
+        log_ratios_full = current_log_probs - old_log_probs
+        log_ratios_full = torch.clamp(log_ratios_full, min=-20.0, max=2.0)
+        ratios_full = torch.exp(log_ratios_full).clamp(1e-8, 1e8)
+
+        log_ratios = log_ratios_full[unforced_mask]
+        ratios = ratios_full[unforced_mask]
+        adv_unforced = advantages[unforced_mask]
+
         # SANITY CHECK: Log ratio statistics
-        ratio_mean = ratios.mean().item()
-        ratio_std = ratios.std().item()
+        ratio_mean = ratios.mean().item() if ratios.numel() > 0 else 1.0
+        ratio_std = ratios.std().item() if ratios.numel() > 0 else 0.0
         logger.info(f"PPO Ratio Check - mean: {ratio_mean:.3f}, std: {ratio_std:.3f}")
-        
-        # Compute clipped policy loss (PPO-style)
-        policy_loss_unclipped = -advantages * ratios
-        policy_loss_clipped = -advantages * torch.clamp(
-            ratios, 1 - self.clip_ratio, 1 + self.clip_ratio
-        )
-        policy_loss = torch.mean(torch.max(policy_loss_unclipped, policy_loss_clipped))
+
+        # Compute clipped policy loss (PPO-style) on unforced steps; if none, fall back to REINFORCE on all
+        if adv_unforced.numel() > 0:
+            policy_loss_unclipped = -adv_unforced * ratios
+            policy_loss_clipped = -adv_unforced * torch.clamp(
+                ratios, 1 - self.clip_ratio, 1 + self.clip_ratio
+            )
+            policy_loss = torch.mean(torch.max(policy_loss_unclipped, policy_loss_clipped))
+        else:
+            logger.warning("No unforced steps available. Falling back to REINFORCE over all steps.")
+            policy_loss = -(advantages * current_log_probs).mean()
         
         # Compute KL divergence penalty
-        # Correct KL divergence computation with clamping for stability
-        log_ratio = current_log_probs - ref_log_probs
-        # Clamp log ratios to prevent extreme values
-        log_ratio = torch.clamp(log_ratio, min=-10.0, max=10.0)
-        kl_divergence = torch.mean(log_ratio ** 2) * 0.5  # Quadratic approximation of KL
+        log_ratio = torch.clamp(current_log_probs - ref_log_probs, min=-10.0, max=10.0)
+        if unforced_mask.any():
+            kl_divergence = torch.mean((log_ratio[unforced_mask]) ** 2) * 0.5
+        else:
+            kl_divergence = torch.mean(log_ratio ** 2) * 0.5
         # Additional clamp on KL divergence itself
         kl_divergence = torch.clamp(kl_divergence, min=0.0, max=100.0)
         
@@ -219,6 +232,12 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
             entropy = -current_log_probs.mean()
             entropy_loss = -self.entropy_coef * entropy
             total_loss += entropy_loss
+
+        # Optional small BC term on forced steps to stabilize (does not affect PPO ratios)
+        bc_loss = 0.0
+        if forced_mask.any():
+            bc_loss = (-current_log_probs[forced_mask]).mean()
+            total_loss = total_loss + 0.01 * bc_loss
         
         # FIX 3.1: Proper gradient handling for mixed precision
         grad_norm = self._optimization_step(total_loss)
@@ -239,6 +258,8 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
             "std_advantage": advantages.std().item(),
             "kl_coef": kl_coef,
             "grad_norm": grad_norm,
+            "ppo/forced_fraction": forced_mask.float().mean().item() if forced_mask.numel() > 0 else 0.0,
+            "ppo/unforced_count": int(unforced_mask.sum().item()),
         }
         
         if value_loss != 0:

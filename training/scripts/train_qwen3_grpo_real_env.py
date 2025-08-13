@@ -461,7 +461,7 @@ class RealEnvironmentGRPOTrainer:
             'device_map': 'auto' if self.device.type == 'cuda' else None,  # Auto device map for CUDA
             'trust_remote_code': True,
             'max_length': max_length,  # Reduced for MPS
-            'stop_sequences': ["</tool_call>", "</think>", "<|im_end|>"],
+            'stop_sequences': ["<|im_end|>"],  # Minimal stop sequences to avoid cutting off generation
             'memory_optimization': {
                 'torch_dtype': 'float16' if self.device.type == 'cuda' else 'float32',
                 'load_in_4bit': False,
@@ -652,7 +652,7 @@ class RealEnvironmentGRPOTrainer:
         
         logger.info("✅ Real environment setup complete!")
     
-    async def collect_trajectories(self, tasks: List[Dict], num_rollouts: int = 1) -> List[Trajectory]:
+    async def collect_trajectories(self, tasks: List[Dict], num_rollouts: int = 4) -> List[Trajectory]:
         """Collect REAL trajectories using MCPToolEnvironment"""
         logger.info(f"\n{'#'*80}")
         logger.info(f"🎮 COLLECTING REAL TRAJECTORIES")
@@ -746,7 +746,11 @@ class RealEnvironmentGRPOTrainer:
                     dones=dones
                 )
                 # Store log probs for GRPO (using key expected by trainer)
-                traj.log_probs = old_log_probs  # CRITICAL FIX: Use 'log_probs' not 'old_log_probs'
+                # CRITICAL FIX: Stack log_probs into a single tensor
+                if old_log_probs:
+                    traj.log_probs = torch.stack(old_log_probs) if isinstance(old_log_probs[0], torch.Tensor) else old_log_probs
+                else:
+                    traj.log_probs = None
                 
                 # Also store forced mask if available
                 if hasattr(self.policy, 'last_forced_mask') and self.policy.last_forced_mask:
@@ -819,7 +823,7 @@ class RealEnvironmentGRPOTrainer:
             batch_tasks = train_tasks[batch_start:batch_end]
             
             # Collect REAL trajectories
-            trajectories = await self.collect_trajectories(batch_tasks, num_rollouts=1)
+            trajectories = await self.collect_trajectories(batch_tasks, num_rollouts=4)
             
             if not trajectories:
                 logger.warning(f"No valid trajectories collected for batch {batch_idx}")
@@ -914,7 +918,7 @@ class RealEnvironmentGRPOTrainer:
         # Collect validation trajectories
         val_trajectories = await self.collect_trajectories(
             self.valid_data[:eval_subset_size],
-            num_rollouts=1
+            num_rollouts=4
         )
         
         # Set policy back to training mode
@@ -1012,121 +1016,10 @@ class RealEnvironmentGRPOTrainer:
             except Exception as e:
                 logger.warning(f"Failed to log to Weave: {e}")
     
-    async def train_epoch(self, epoch: int) -> Dict[str, float]:
-        """Train for one epoch with real environment rollouts"""
-        logger.info(f"\n{'='*30} EPOCH {epoch} {'='*30}")
-        
-        epoch_stats = {
-            'epoch': epoch,
-            'trajectories_collected': 0,
-            'total_reward': 0.0,
-            'avg_reward': 0.0,
-            'policy_loss': 0.0,
-            'value_loss': 0.0,
-            'kl_divergence': 0.0,
-            'failed_episodes': 0,
-            'successful_episodes': 0
-        }
-        
-        batch_size = self.configs['training'].get('batch_size', 4)
-        
-        # Collect trajectories for this epoch
-        logger.info(f"Collecting {batch_size} trajectories...")
-        
-        try:
-            trajectories = await self.trajectory_collector.collect_batch(
-                tasks=self.train_data[:batch_size],  # Use first batch_size tasks
-                batch_timeout=180.0  # 3 minute timeout per batch
-            )
-            
-            epoch_stats['trajectories_collected'] = len(trajectories)
-            
-            # Convert EpisodeResult to Trajectory objects for GRPO
-            grpo_trajectories = []
-            for episode_result in trajectories:
-                if episode_result.is_valid():
-                    # Convert EpisodeResult to Trajectory format
-                    trajectory = Trajectory(
-                        task_id=episode_result.task_id,
-                        states=[],  # Will be populated from trajectory data
-                        actions=[], 
-                        rewards=[],
-                        dones=[],
-                        log_probs=None,
-                        values=None
-                    )
-                    
-                    # Extract data from episode trajectory
-                    for step in episode_result.trajectory:
-                        trajectory.actions.append(step.get('action', ''))
-                        trajectory.rewards.append(step.get('reward', 0.0))
-                        trajectory.dones.append(step.get('done', False))
-                        trajectory.states.append(step.get('state', []))
-                    
-                    # Set total reward and length
-                    trajectory.total_reward = sum(trajectory.rewards) 
-                    trajectory.length = len(trajectory.actions)
-                    
-                    grpo_trajectories.append(trajectory)
-            
-            epoch_stats['trajectories_collected'] = len(grpo_trajectories)
-            
-            # Calculate trajectory statistics  
-            rewards = [traj.total_reward for traj in grpo_trajectories]
-            epoch_stats['total_reward'] = sum(rewards)
-            epoch_stats['avg_reward'] = np.mean(rewards) if rewards else 0.0
-            
-            # Count successes/failures
-            for traj in grpo_trajectories:
-                if traj.total_reward > 0.5:  # Success threshold
-                    epoch_stats['successful_episodes'] += 1
-                else:
-                    epoch_stats['failed_episodes'] += 1
-            
-            logger.info(f"Collected {len(grpo_trajectories)} trajectories")
-            logger.info(f"Average reward: {epoch_stats['avg_reward']:.3f}")
-            logger.info(f"Success rate: {epoch_stats['successful_episodes']}/{len(grpo_trajectories)}")
-            
-            # Train the policy with GRPO
-            if len(grpo_trajectories) > 0:
-                logger.info("Training policy with GRPO...")
-                
-                # Train with GRPO trajectories
-                training_metrics = self.trainer.train_step(grpo_trajectories)
-                
-                # COMPREHENSIVE LOGGING: Use the same comprehensive logging
-                comprehensive_metrics = self._log_comprehensive_training_metrics(
-                    training_metrics=training_metrics,
-                    trajectories=grpo_trajectories,
-                    step=self.global_step
-                )
-                
-                # Update epoch stats with training metrics
-                epoch_stats.update({
-                    'policy_loss': training_metrics.get('policy_loss', 0.0),
-                    'value_loss': training_metrics.get('value_loss', 0.0), 
-                    'kl_divergence': training_metrics.get('kl_divergence', 0.0)
-                })
-                
-                self.global_step += 1
-                
-                logger.info(f"Training metrics - Policy Loss: {epoch_stats['policy_loss']:.4f}, "
-                           f"Value Loss: {epoch_stats['value_loss']:.4f}, "
-                           f"KL Div: {epoch_stats['kl_divergence']:.4f}")
-            
-        except Exception as e:
-            logger.error(f"Error during training epoch {epoch}: {e}")
-            epoch_stats['failed_episodes'] = batch_size
-            
-            # Still log the failure
-            self._log_wandb({
-                'train/epoch': epoch,
-                'train/error': 1,
-                'train/avg_reward': 0.0,
-                'trainer/global_step': self.global_step
-            }, step=self.global_step, commit=True)
-        
-        return epoch_stats
+    # NOTE: Removed a duplicate simplified train_epoch implementation that
+    # collected only one trajectory per task and ignored multi-rollout collection.
+    # The earlier train_epoch (defined above in this file) already performs
+    # real environment rollouts using collect_trajectories with num_rollouts>1.
     
     async def train(self):
         """Main training loop with REAL environment rollouts"""

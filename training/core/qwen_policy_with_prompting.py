@@ -26,41 +26,25 @@ class QwenPolicyWithPrompting(QwenPolicy):
         self.force_rate = float(os.getenv('FORCE_RATE', str(self.force_rate)))
         self.assist_warmup_steps = int(os.getenv('ASSIST_WARMUP', str(self.assist_warmup_steps)))
     
-    TOOL_CALLING_PROMPT = """You are a specialized AI assistant that MUST use tools to answer questions. You cannot answer questions without using the appropriate tools first.
+    TOOL_CALLING_PROMPT = """You MUST use tools. Always start with a tool call. No thinking, no explanations.
 
-CRITICAL: You MUST use tools. Do NOT provide answers without tool usage.
+FORMAT: <tool_call>{"name": "tool_name", "arguments": {"key": "value"}}</tool_call>
 
-Tool call format (copy exactly):
-<tool_call>{"name": "tool_name", "arguments": {"key": "value"}}</tool_call>
-
-Available tools:
-- fmp_get_quote: Get stock price (use symbol like "AAPL")
-- fmp_search_ticker: Search for stock symbols
-- polygon_get_ticker_details: Get company details
-- polygon_get_news: Get stock news
+TOOLS:
+- fmp_get_quote: Get stock price (symbol: "AAPL")
+- fmp_search_ticker: Search stock symbols 
+- polygon_get_ticker_details: Company details
+- polygon_get_news: Stock news
 - tavily_search: Web search
-- execute_python: Run Python code
-- send_slack_message: Send messages
+- execute_python: Run code
+- send_slack_message: Send message
 
-MANDATORY EXAMPLES - Study these patterns:
+EXAMPLES:
+<tool_call>{"name": "fmp_get_quote", "arguments": {"symbol": "AAPL"}}</tool_call>
+<tool_call>{"name": "tavily_search", "arguments": {"query": "ESG trends"}}</tool_call>
+<tool_call>{"name": "polygon_get_news", "arguments": {"ticker": "TSLA"}}</tool_call>
 
-Q: What's Apple's stock price?
-A: <tool_call>{"name": "fmp_get_quote", "arguments": {"symbol": "AAPL"}}</tool_call>
-
-Q: Search Tesla news
-A: <tool_call>{"name": "polygon_get_news", "arguments": {"ticker": "TSLA"}}</tool_call>
-
-Q: Find Microsoft ticker
-A: <tool_call>{"name": "fmp_search_ticker", "arguments": {"query": "Microsoft"}}</tool_call>
-
-RULES:
-1. ALWAYS start with a tool call - no explanations first
-2. Use the EXACT JSON format shown above
-3. Wait for tool response before continuing
-4. Never guess data - always use tools
-5. If you don't use tools, you will be penalized
-
-Your first response MUST be a tool call."""
+START WITH A TOOL CALL NOW."""
     
     def format_conversation(self, messages: List[Dict[str, str]]) -> str:
         """
@@ -94,19 +78,22 @@ Your first response MUST be a tool call."""
         """
         Generate actions with enhanced prompting and guided generation.
         """
-        # Use lower temperature for more consistent formatting
+        # Use very low temperature for strict tool call format adherence
         if temperature is None:
-            temperature = 0.01  # Very low for strict adherence to format
+            temperature = 0.1  # Very low to force consistent tool call generation
         
-        # Much shorter tokens to force structured responses
+        # Allow enough tokens for complete tool calls
         if max_new_tokens is None:
-            max_new_tokens = 100  # Very short to force immediate tool calls
+            max_new_tokens = 512  # Increased to allow complete tool call generation
         
-        # Generate actions from base model
+        # Generate actions from base model with enhanced parameters
         actions = super().generate_action(
             states,
             max_new_tokens=max_new_tokens,
             temperature=temperature,
+            top_p=0.9,  # Add nucleus sampling
+            do_sample=True,  # Enable sampling
+            repetition_penalty=1.1,  # Reduce repetition
             **kwargs
         )
         
@@ -122,34 +109,31 @@ Your first response MUST be a tool call."""
             else:
                 logger.info(f"⚠️ Model generated natural language only")
         
-        # Let model learn naturally through rewards - DETERMINISTIC intervention
+        # Post-process with aggressive tool call enforcement
         processed_actions = []
+        forced_mask: List[bool] = []
         for i, action in enumerate(actions):
-            if not action.strip().startswith('<tool_call>') and '<tool_call>' not in action:
-                # DETERMINISTIC forcing based on counter (no randomness)
-                self.action_counter += 1
-                # Force based on deterministic pattern: 4 out of 5 actions (80%)
-                should_force = (self.action_counter % 5) != 0  # True for 1,2,3,4; False for 5
-                
-                if should_force:
-                    context = str(states[i] if i < len(states) else states[-1]).lower()
-                    forced_action = self._generate_forced_tool_call(context)
-                    logger.info(f"🔧 FORCED tool call (deterministic counter={self.action_counter}):")
-                    logger.info(f"{'='*60}")
-                    logger.info(f"{forced_action}")
-                    logger.info(f"{'='*60}")
-                    processed_actions.append(forced_action)
-                else:
-                    # Let natural response through - model will learn from 0 rewards
-                    logger.info(f"🎯 NATURAL response preserved (counter={self.action_counter})")
-                    processed_actions.append(action)
+            is_tool = '<tool_call>' in action and '</tool_call>' in action
+            self.action_counter += 1
+
+            # AGGRESSIVE FIX: If model generates broken output, force a tool call
+            if not is_tool or len(action.strip()) < 10:
+                context = str(states[i] if i < len(states) else states[-1]).lower()
+                forced_action = self._generate_forced_tool_call(context)
+                logger.info(f"🔧 FORCED tool call - model output was broken: '{action[:50]}...'")
+                processed_actions.append(forced_action)
+                forced_mask.append(True)
             else:
-                logger.info(f"✅ NATURAL tool call preserved")
+                logger.info("🎯 NATURAL tool call preserved")
                 processed_actions.append(action)
-        
+                forced_mask.append(False)
+
+        # Expose last forced mask for trainer consumption
+        self.last_forced_mask = forced_mask
+
         return processed_actions
     
-    def sample_with_logprobs(self, states: List[List[Dict[str, str]]], max_new_tokens: int = 100) -> tuple:
+    def sample_with_logprobs(self, states: List[List[Dict[str, str]]], max_new_tokens: int = 512) -> tuple:
         """
         Generate actions and return both actions and their log probabilities at sampling time.
         This enables proper PPO ratio computation by capturing log-probs at the moment of sampling.
