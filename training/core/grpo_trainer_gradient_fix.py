@@ -63,7 +63,8 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
         )
         
         if self.use_mixed_precision:
-            self.scaler = amp.GradScaler(device_type="cuda")
+            # PyTorch 2.8.0 compatibility - GradScaler doesn't take device_type parameter
+            self.scaler = amp.GradScaler()
             logger.info("Mixed precision training enabled with GradScaler")
         else:
             self.scaler = None

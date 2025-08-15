@@ -13,7 +13,10 @@ cd "$ROOT_DIR"
 echo "Working directory: $(pwd)"
 
 # Activate virtual environment if it exists
-if [ -d "$ROOT_DIR/venv312" ]; then
+if [ -d "/home/ubuntu/skyrl_env" ]; then
+    source "/home/ubuntu/skyrl_env/bin/activate"
+    echo "SkyRL virtual environment activated"
+elif [ -d "$ROOT_DIR/venv312" ]; then
     source "$ROOT_DIR/venv312/bin/activate"
     echo "Python 3.12 virtual environment activated"
 elif [ -f "$ROOT_DIR/.venv/bin/activate" ]; then
