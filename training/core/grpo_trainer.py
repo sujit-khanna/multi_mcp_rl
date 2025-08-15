@@ -353,9 +353,10 @@ class GRPOTrainer:
         start_time = time.time()
         
         try:
-            # Move trajectories to device
-            logger.info(f"Moving {len(trajectories)} trajectories to device {self.device}")
-            trajectories = [traj.to_device(self.device) for traj in trajectories]
+            # Move trajectories to the policy's device
+            policy_device = getattr(self.policy.model, "device", self.device)
+            logger.info(f"Moving {len(trajectories)} trajectories to device {policy_device}")
+            trajectories = [traj.to_device(policy_device) for traj in trajectories]
             logger.info("✅ Trajectories moved to device successfully")
             
             # Group trajectories by task for relative reward computation
@@ -395,12 +396,14 @@ class GRPOTrainer:
             is_training = self.policy.model.training
             trainable_count = sum(1 for p in self.policy.model.parameters() if p.requires_grad)
             logger.info(f"Model training state: {is_training}, trainable params: {trainable_count}")
-            
-            # Ensure model is in training mode
+
+            # Ensure model and value head are in training mode
             if not is_training:
                 logger.warning("Model not in training mode! Re-enabling...")
-                self.policy.enable_training_mode()
-            
+            self.policy.enable_training_mode()
+            if hasattr(self.policy, 'value_head'):
+                self.policy.value_head.train()
+
             policy_metrics = self._update_policy(all_trajectories)
             logger.info("✅ Policy updated successfully")
             
