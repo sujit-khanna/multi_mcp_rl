@@ -41,7 +41,7 @@ export CUDA_VISIBLE_DEVICES=0  # Use first GPU, change if needed
 export CUDA_LAUNCH_BLOCKING=0  # Async execution for better performance
 export TORCH_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6;8.9;9.0"  # Support various GPU architectures
 export CUBLAS_WORKSPACE_CONFIG=:4096:8  # For deterministic operations
-export PYTORCH_CUDA_ALLOC_CONF="max_split_size_mb:512"  # Memory fragmentation optimization
+export PYTORCH_CUDA_ALLOC_CONF="max_split_size_mb:512,backend:cudaMallocAsync"  # Memory optimization
 
 # Enable TF32 for Ampere GPUs (3090, A100, etc.)
 export TORCH_ALLOW_TF32_CUBLAS_OVERRIDE=1
@@ -51,12 +51,9 @@ export NVIDIA_TF32_OVERRIDE=1
 export MIXED_PRECISION="fp16"  # or "bf16" for newer GPUs
 export ACCELERATE_MIXED_PRECISION="fp16"
 
-# Memory optimization
-export PYTORCH_CUDA_ALLOC_CONF="backend:cudaMallocAsync"  # Better memory management
 export CUDA_MODULE_LOADING=LAZY  # Lazy loading for faster startup
 
 # Disable debugging features for performance
-export CUDA_LAUNCH_BLOCKING=0
 export TORCH_USE_CUDA_DSA=1  # Device-side assertions
 
 # Load environment variables from .env

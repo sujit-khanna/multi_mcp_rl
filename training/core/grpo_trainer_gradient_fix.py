@@ -9,7 +9,7 @@ BEFORE clipping them, otherwise the clipping has no effect.
 import logging
 import torch
 import numpy as np
-from torch.cuda.amp import GradScaler
+from torch import amp
 from typing import Dict, List, Optional, Any
 
 from .grpo_trainer_fixed_ref_policy import GRPOTrainerFixedRefPolicy
@@ -63,7 +63,7 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
         )
         
         if self.use_mixed_precision:
-            self.scaler = GradScaler()
+            self.scaler = amp.GradScaler(device_type="cuda")
             logger.info("Mixed precision training enabled with GradScaler")
         else:
             self.scaler = None
@@ -384,7 +384,7 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
         with torch.no_grad():
             # Get source state dict (includes LoRA weights if applicable)
             src_state = self.policy.state_dict()
-            
+
             # Try to include LoRA/PEFT adapter weights explicitly
             try:
                 from peft import get_peft_model_state_dict
@@ -394,14 +394,27 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
                     logger.info(f"Included {len(lora_state)} LoRA parameters in sync")
             except Exception as e:
                 logger.debug(f"No LoRA state to sync: {e}")
-            
+
+            # Filter out non-trainable buffers (quantization artifacts)
+            exclude = (".quant_state", ".absmax", ".quant_map", ".zeros", ".scales")
+            filtered_state = {k: v for k, v in src_state.items() if not any(e in k for e in exclude)}
+
+            skipped = [k for k in src_state.keys() if any(e in k for e in exclude)]
+            if skipped:
+                logger.debug(f"Skipped {len(skipped)} non-trainable buffers during sync")
+
             # Load into reference policy
-            missing, unexpected = self.reference_policy.load_state_dict(src_state, strict=False)
-            
+            missing, unexpected = self.reference_policy.load_state_dict(filtered_state, strict=False)
+
             if missing:
                 logger.warning(f"Missing keys in reference sync: {missing}")
             if unexpected:
                 logger.warning(f"Unexpected keys in reference sync: {unexpected}")
+
+            # Copy value head explicitly if present
+            if hasattr(self.policy, 'value_head') and hasattr(self.reference_policy, 'value_head'):
+                self.reference_policy.value_head.load_state_dict(self.policy.value_head.state_dict())
+                logger.info("Updated reference policy value head")
         
         # Freeze reference policy parameters
         for param in self.reference_policy.parameters():

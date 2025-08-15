@@ -549,7 +549,7 @@ class RealEnvironmentGRPOTrainer:
         logger.info("✅ Policy configured for RL mode (no forced actions)")
         
         # Update device to match actual policy device (in case of fallback)
-        self.device = self.policy.device
+        self.device = self.policy.model.device
         
         logger.info(f"Models initialized with {self.policy.get_trainable_parameters():,} trainable parameters")
         logger.info(f"Actual device after model setup: {self.device}")
