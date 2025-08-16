@@ -13,18 +13,22 @@ logger = logging.getLogger(__name__)
 class QwenPolicyWithPrompting(QwenPolicy):
     """QwenPolicy with additional prompting for untrained models."""
     
-    def __init__(self, *args, force_rate: float = 0.0, assist_warmup_steps: int = 0, **kwargs):
+    def __init__(self, *args, force_rate: float = 0.0, assist_warmup_steps: int = 0, rl_mode: bool = True, **kwargs):
         """Initialize with configurable forcing for RL vs warmup phases."""
         super().__init__(*args, **kwargs)
         self.action_counter = 0  # Deterministic counter for forcing decisions
         self.force_rate = force_rate  # Configurable forcing rate (0.0 for RL)
         self.assist_warmup_steps = assist_warmup_steps
+        self.rl_mode = rl_mode  # True during RL training, False during pretraining/warmup
         self.in_rl_update = True  # Set by trainer during RL phases
         
         # Environment variable overrides
         import os
         self.force_rate = float(os.getenv('FORCE_RATE', str(self.force_rate)))
         self.assist_warmup_steps = int(os.getenv('ASSIST_WARMUP', str(self.assist_warmup_steps)))
+        self.rl_mode = os.getenv('RL_MODE', str(self.rl_mode)).lower() == 'true'
+        
+        logger.info(f"🎯 Policy initialized - RL mode: {self.rl_mode}, Force rate: {self.force_rate}")
     
     TOOL_CALLING_PROMPT = """You MUST use tools. Always start with a tool call. No thinking, no explanations.
 
@@ -109,22 +113,38 @@ START WITH A TOOL CALL NOW."""
             else:
                 logger.info(f"⚠️ Model generated natural language only")
         
-        # Post-process with aggressive tool call enforcement
+        # Post-process with conditional tool call enforcement
         processed_actions = []
         forced_mask: List[bool] = []
         for i, action in enumerate(actions):
             is_tool = '<tool_call>' in action and '</tool_call>' in action
             self.action_counter += 1
 
-            # AGGRESSIVE FIX: If model generates broken output, force a tool call
-            if not is_tool or len(action.strip()) < 10:
+            # Check if we should force tool calls based on RL mode and force rate
+            should_force = False
+            if self.rl_mode and self.force_rate <= 0.0:
+                # In RL mode with no forcing - never force
+                should_force = False
+                logger.debug("🚫 RL mode active - no forcing allowed")
+            elif not self.rl_mode or self.action_counter <= self.assist_warmup_steps:
+                # In warmup/pretraining mode or within warmup steps
+                should_force = not is_tool or len(action.strip()) < 10
+            else:
+                # Use force rate for probabilistic forcing
+                import random
+                should_force = (not is_tool or len(action.strip()) < 10) and random.random() < self.force_rate
+
+            if should_force:
                 context = str(states[i] if i < len(states) else states[-1]).lower()
                 forced_action = self._generate_forced_tool_call(context)
                 logger.info(f"🔧 FORCED tool call - model output was broken: '{action[:50]}...'")
                 processed_actions.append(forced_action)
                 forced_mask.append(True)
             else:
-                logger.info("🎯 NATURAL tool call preserved")
+                if not is_tool:
+                    logger.info("📝 NATURAL language preserved (RL mode)")
+                else:
+                    logger.info("🎯 NATURAL tool call preserved")
                 processed_actions.append(action)
                 forced_mask.append(False)
 

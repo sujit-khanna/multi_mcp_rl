@@ -551,6 +551,18 @@ class TrajectoryCollector:
         """Execute action in environment and return step result."""
         
         try:
+            # Check if policy indicates this action was forced
+            forced_action = False
+            if hasattr(self.policy, 'last_forced_mask') and self.policy.last_forced_mask:
+                # Get the forced status for the current action index
+                action_idx = len(trajectory) if trajectory else 0
+                if action_idx < len(self.policy.last_forced_mask):
+                    forced_action = self.policy.last_forced_mask[action_idx]
+            
+            # Set forced action flag on environment before step
+            if hasattr(env, '_last_action_was_forced'):
+                env._last_action_was_forced = forced_action
+            
             # Run environment step in executor since it may involve sync tool calls
             step_result = await asyncio.get_event_loop().run_in_executor(
                 self.executor,

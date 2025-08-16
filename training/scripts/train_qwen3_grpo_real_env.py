@@ -522,7 +522,10 @@ class RealEnvironmentGRPOTrainer:
             use_lora=self.configs['model'].get('use_lora', True),
             device=str(self.device),
             load_in_4bit=enable_4bit,
-            value_head_hidden_dim=value_head_hidden_dim
+            value_head_hidden_dim=value_head_hidden_dim,
+            # CRITICAL: Set RL mode to disable forcing
+            rl_mode=True,
+            force_rate=0.0
         )
         
         # Create reference policy (copy of initial policy)
@@ -533,7 +536,10 @@ class RealEnvironmentGRPOTrainer:
             use_lora=self.configs['model'].get('use_lora', True),
             device=str(self.device),
             load_in_4bit=enable_4bit,
-            value_head_hidden_dim=value_head_hidden_dim
+            value_head_hidden_dim=value_head_hidden_dim,
+            # CRITICAL: Set RL mode to disable forcing  
+            rl_mode=True,
+            force_rate=0.0
         )
         
         # Copy initial weights to reference policy using robust sync
@@ -831,8 +837,46 @@ class RealEnvironmentGRPOTrainer:
             
             # Training step
             try:
+                logger.info(f"🔥 CALLING TRAINER.TRAIN_STEP WITH {len(trajectories)} TRAJECTORIES")
+                assert len(trajectories) > 0, "No trajectories collected for training step"
+                
+                # CRITICAL: Verify trajectories have necessary fields for advantage computation
+                for i, traj in enumerate(trajectories[:2]):  # Check first 2
+                    logger.info(f"🔍 TRAJECTORY {i} VALIDATION:")
+                    logger.info(f"   States: {len(traj.states)}, Actions: {len(traj.actions)}")
+                    logger.info(f"   Rewards: {len(traj.rewards)} - {traj.rewards[:3] if traj.rewards else []}")
+                    logger.info(f"   Dones: {len(traj.dones)} - {traj.dones[:3] if traj.dones else []}")
+                    logger.info(f"   Has log_probs: {hasattr(traj, 'log_probs') and traj.log_probs is not None}")
+                    logger.info(f"   Has advantages: {hasattr(traj, 'advantages') and traj.advantages is not None}")
+                
                 metrics = self.trainer.train_step(trajectories)
                 
+                logger.info(f"🎯 TRAIN_STEP RETURNED METRICS: {list(metrics.keys()) if metrics else 'None'}")
+                assert metrics is not None, "Trainer.train_step returned None"
+                assert len(metrics) > 0, f"Trainer.train_step returned empty metrics: {metrics}"
+                
+                # CRITICAL: Log a debug ping to WandB to verify metrics are flowing
+                if self.use_wandb:
+                    self._log_wandb({
+                        'debug/training_step_ping': 1,
+                        'debug/global_step': self.global_step,
+                        'debug/batch_idx': batch_idx,
+                        'debug/epoch': epoch
+                    }, step=self.global_step, commit=False)
+                
+                # LOG CORE METRICS DIRECTLY (backup for comprehensive logging)
+                if self.use_wandb:
+                    core_metrics = {
+                        'train/total_loss': metrics.get('total_loss', 0.0),
+                        'train/policy_loss': metrics.get('policy_loss', 0.0),
+                        'train/value_loss': metrics.get('value_loss', 0.0),
+                        'train/kl_divergence': metrics.get('kl_divergence', 0.0),
+                        'train/step': self.global_step,
+                        'rollout/num_trajectories': len(trajectories),
+                        'rollout/mean_reward': np.mean([traj.total_reward for traj in trajectories]) if trajectories else 0.0
+                    }
+                    self._log_wandb(core_metrics, step=self.global_step, commit=False)
+
                 # COMPREHENSIVE LOGGING: Log all training metrics to WandB/Weave
                 comprehensive_metrics = self._log_comprehensive_training_metrics(
                     training_metrics=metrics,

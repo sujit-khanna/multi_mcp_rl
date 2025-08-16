@@ -162,6 +162,18 @@ class MCPToolEnvironmentWithLogging(BaseMCPToolEnvironment):
         if reasoning_blocks:
             logger.info(f"🤔 Found {len(reasoning_blocks)} reasoning blocks")
         
+        # Check if this action was forced (from policy tracking)
+        # This will be set by the policy if it forced a tool call
+        forced_action = getattr(self, '_last_action_was_forced', False)
+        
+        # Apply forced action penalty
+        if forced_action and hasattr(self, 'reward_components'):
+            self.reward_components.forced_action_penalty = 0.1
+            logger.info(f"⚠️ FORCED ACTION PENALTY: -0.1")
+        else:
+            if hasattr(self, 'reward_components'):
+                self.reward_components.forced_action_penalty = 0.0
+        
         # Call parent step
         result = super().step(action)
         

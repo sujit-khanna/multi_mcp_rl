@@ -32,6 +32,7 @@ export TOKENIZERS_PARALLELISM=false
 # CRITICAL FIXES: Environment variables for RL training improvements
 export FORCE_RATE="0.0"                    # Disable forcing during RL updates
 export ASSIST_WARMUP="0"                   # No warmup steps  
+export RL_MODE="true"                      # Enable RL mode (critical fix)
 export RL_DISABLE_FORCED="1"               # Disable forced actions in RL
 export PPO_RECORD_AT_SAMPLE="1"            # Record log-probs at sampling time
 export STRICT_TRAJ_KEYS="1"                # Strict trajectory key validation
@@ -243,9 +244,9 @@ echo "================================================"
 # Set ulimit for better performance
 ulimit -n 65536  # Increase file descriptor limit
 
-# Launch training with GPU monitoring
+# Launch training with GPU monitoring (using existing config with our critical fixes)
 python training/scripts/train_qwen3_grpo_real_env.py \
-    --config $OUTPUT_DIR/gpu_training_config.yaml \
+    --config training/configs/training_config_qwen3_0.6b.yaml \
     --device cuda \
     --mixed-precision $MIXED_PRECISION \
     --enable-profiling \

@@ -123,11 +123,11 @@ class RewardComponents:
     def total(self) -> float:
         """Calculate weighted total reward"""
         weights = {
-            'task_completion': 0.3,
-            'reasoning_quality': 0.2,
+            'task_completion': 0.4,    # Increased - completion is most important
+            'reasoning_quality': 0.15,
             'tool_efficiency': 0.15,
             'error_recovery': 0.1,
-            'intermediate_progress': 0.1,
+            'intermediate_progress': 0.05,  # Reduced to avoid constant rewards
             'state_correctness': 0.1,
             'response_correctness': 0.05
         }
@@ -135,6 +135,10 @@ class RewardComponents:
         total = 0.0
         for component, weight in weights.items():
             total += getattr(self, component) * weight
+        
+        # Add penalty for forced actions (set externally)
+        forced_penalty = getattr(self, 'forced_action_penalty', 0.0)
+        total -= forced_penalty
         
         return min(1.0, max(0.0, total))
 
@@ -198,11 +202,11 @@ class MCPToolEnvironment(BaseTextEnv):
     def _get_max_turns_by_complexity(self) -> int:
         """Get maximum turns based on task complexity"""
         complexity_limits = {
-            "easy": 8,
-            "medium": 12,
-            "hard": 15
+            "easy": 5,     # Reduced for faster training
+            "medium": 8,   # Reduced for faster training
+            "hard": 10     # Reduced for faster training
         }
-        return complexity_limits.get(self.complexity, 10)
+        return complexity_limits.get(self.complexity, 6)
     
     async def initialize_tools(self):
         """Initialize MCP tool manager asynchronously"""
