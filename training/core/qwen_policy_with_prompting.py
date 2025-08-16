@@ -6,6 +6,7 @@ Enhanced QwenPolicy with prompting to help untrained models generate proper tool
 from typing import List, Dict, Optional
 import logging
 import time
+import os
 from .qwen_policy import QwenPolicy
 
 logger = logging.getLogger(__name__)
