@@ -7,6 +7,7 @@ from .qwen_policy_with_prompting import QwenPolicyWithPrompting
 import torch
 import torch.nn as nn
 import logging
+from typing import List, Dict, Optional
 
 class ValueHead(nn.Module):
     """Value head for state value estimation."""
@@ -63,10 +64,13 @@ class QwenPolicyWithValuePrompting(QwenPolicyWithPrompting):
         
         # Move value head to same device as model
         self.value_head = self.value_head.to(self.device)
-        
+
         # Count value head parameters
         value_params = sum(p.numel() for p in self.value_head.parameters())
         logger.info(f"Added value head with {value_params:,} parameters")
+
+        # Store any malformed model outputs for later analysis
+        self.malformed_outputs: List[str] = []
         
     def compute_values(self, states):
         """Compute value estimates for states."""
@@ -101,8 +105,69 @@ class QwenPolicyWithValuePrompting(QwenPolicyWithPrompting):
         
         # Compute values
         values = self.value_head(pooled_hidden)
-        
+
         return values
+
+    def generate_action(
+        self,
+        states: List[List[Dict[str, str]]],
+        max_new_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+        **kwargs
+    ) -> List[str]:
+        """Generate actions and ensure the first token is a tool call.
+
+        If the model fails to begin with a tool call tag, we re-prompt with an
+        explicit reminder and log the malformed output for later analysis.
+        """
+
+        # First attempt using the standard prompting behaviour
+        actions = super().generate_action(
+            states,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            **kwargs,
+        )
+
+        validated_actions: List[str] = []
+        forced_mask: List[bool] = []
+
+        reminder = (
+            "REMINDER: Respond ONLY with a tool call in the exact format "
+            "<tool_call>{\"name\": \"tool_name\", \"arguments\": {\"key\": \"value\"}}</tool_call> "
+            "and do not include any other text."
+        )
+
+        for idx, action in enumerate(actions):
+            if action.lstrip().startswith("<tool_call>"):
+                validated_actions.append(action)
+                forced_mask.append(False)
+                continue
+
+            # Log and store malformed output
+            logger.warning(
+                "Model output did not start with <tool_call>: %s",
+                action[:100].replace("\n", " "),
+            )
+            self.malformed_outputs.append(action)
+
+            # Re-prompt with explicit reminder
+            reminder_state = states[idx] + [{"role": "system", "content": reminder}]
+            corrected = super().generate_action(
+                [reminder_state],
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+                **kwargs,
+            )[0]
+            logger.info("Re-prompted model output: %s", corrected)
+
+            validated_actions.append(corrected)
+            forced_mask.append(True)
+
+        # Expose mask indicating which actions were corrected
+        self.last_forced_mask = forced_mask
+
+        return validated_actions
     
     def get_trainable_parameters(self) -> int:
         """Get total number of trainable parameters including value head."""
