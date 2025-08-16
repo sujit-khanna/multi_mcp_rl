@@ -181,8 +181,8 @@ class SimpleQwen3Trainer:
         for param in self.model.parameters():
             param.requires_grad = True
         
-        # Enable gradient checkpointing for memory efficiency
-        self.model.gradient_checkpointing_enable()
+        # DISABLED: Gradient checkpointing incompatible with Qwen2 KV caching
+        # self.model.gradient_checkpointing_enable()
         
         # Setup optimizer with lower learning rate for stability
         lr = float(self.configs['training']['learning_rate'])

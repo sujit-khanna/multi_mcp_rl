@@ -191,9 +191,22 @@ YOU MUST START YOUR RESPONSE WITH <tool_call>"""
         logger.info(f"   Use cache: {use_cache}")
         
         start_time = time.time()
+        
+        # CRITICAL FIX: Force disable gradient checkpointing before generation
+        was_training = self.model.training
+        original_gc_state = getattr(self.model.config, 'gradient_checkpointing', None)
+        
+        # Temporarily disable gradient checkpointing and set eval mode
+        if hasattr(self.model.config, 'gradient_checkpointing'):
+            self.model.config.gradient_checkpointing = False
+        if hasattr(self.model, 'gradient_checkpointing_disable'):
+            self.model.gradient_checkpointing_disable()
+        self.model.eval()
+        use_cache = True  # Always use cache since we disabled gradient checkpointing
+        
         with torch.no_grad():
             # Generate with the model
-            logger.info("🔥 Calling model.generate()...")
+            logger.info("🔥 Calling model.generate() with gradient_checkpointing=False...")
             generated_ids = self.model.generate(
                 inputs['input_ids'],
                 attention_mask=inputs['attention_mask'],
@@ -205,20 +218,26 @@ YOU MUST START YOUR RESPONSE WITH <tool_call>"""
             )
             generation_time = time.time() - start_time
             logger.info(f"✅ Model generation completed in {generation_time:.2f} seconds")
+        
+        # Restore original model state
+        if was_training:
+            self.model.train()
+        if original_gc_state is not None and hasattr(self.model.config, 'gradient_checkpointing'):
+            self.model.config.gradient_checkpointing = original_gc_state
             
-            # Extract generated parts (after input)
-            for i in range(len(formatted_inputs)):
-                input_length = inputs['input_ids'][i].shape[0]
-                generated_part = generated_ids[i][input_length:]
-                
-                if len(generated_part) > 0:
-                    generated_text = self.tokenizer.decode(generated_part, skip_special_tokens=True)
-                    actions.append(generated_text)
-                    # Use dummy log prob for now - much faster than computing real ones
-                    all_log_probs.append(torch.tensor(-1.0, device=self.device))
-                else:
-                    actions.append("")
-                    all_log_probs.append(torch.tensor(-1.0, device=self.device))
+        # Extract generated parts (after input)
+        for i in range(len(formatted_inputs)):
+            input_length = inputs['input_ids'][i].shape[0]
+            generated_part = generated_ids[i][input_length:]
+            
+            if len(generated_part) > 0:
+                generated_text = self.tokenizer.decode(generated_part, skip_special_tokens=True)
+                actions.append(generated_text)
+                # Use dummy log prob for now - much faster than computing real ones
+                all_log_probs.append(torch.tensor(-1.0, device=self.device))
+            else:
+                actions.append("")
+                all_log_probs.append(torch.tensor(-1.0, device=self.device))
         
         return actions, all_log_probs
     

@@ -195,6 +195,12 @@ class QwenPolicy:
             **model_kwargs
         )
         
+        # CRITICAL FIX: Explicitly disable gradient checkpointing to prevent Qwen2 KV cache warnings
+        if hasattr(self.model, 'gradient_checkpointing_disable'):
+            self.model.gradient_checkpointing_disable()
+        if hasattr(self.model.config, 'gradient_checkpointing'):
+            self.model.config.gradient_checkpointing = False
+        
         # Apply LoRA if specified
         if self.use_lora:
             self._apply_lora()
@@ -275,9 +281,9 @@ class QwenPolicy:
         
         full_config = self.model_config["full_finetune_mode"]
         
-        # Enable gradient checkpointing if specified
-        if full_config.get("gradient_checkpointing", False):
-            self.model.gradient_checkpointing_enable()
+        # DISABLED: Gradient checkpointing incompatible with Qwen2 KV caching
+        # if full_config.get("gradient_checkpointing", False):
+        #     self.model.gradient_checkpointing_enable()
         
         # Ensure all parameters are trainable
         for param in self.model.parameters():
@@ -456,9 +462,19 @@ class QwenPolicy:
         logger.info(f"✅ STEP 7: Generation config ready (max_tokens: {gen_config.max_new_tokens}, temp: {gen_config.temperature})")
         
         # Generate with the model
-        # Disable cache if gradient checkpointing is enabled to avoid warnings
-        use_cache = not getattr(self.model, 'gradient_checkpointing', False)
-        logger.info(f"🔥 STEP 8: About to call model.generate() with use_cache={use_cache}...")
+        # CRITICAL FIX: Force disable gradient checkpointing before generation
+        was_training = self.model.training
+        original_gc_state = getattr(self.model.config, 'gradient_checkpointing', None)
+        
+        # Temporarily disable gradient checkpointing and set eval mode
+        if hasattr(self.model.config, 'gradient_checkpointing'):
+            self.model.config.gradient_checkpointing = False
+        if hasattr(self.model, 'gradient_checkpointing_disable'):
+            self.model.gradient_checkpointing_disable()
+        self.model.eval()
+        
+        use_cache = True  # Always use cache since we disabled gradient checkpointing
+        logger.info(f"🔥 STEP 8: About to call model.generate() with use_cache={use_cache}, gradient_checkpointing=False...")
         
         with torch.no_grad():
             logger.info("🚀 STEP 9: Starting model.generate() call...")
@@ -473,6 +489,12 @@ class QwenPolicy:
             )
             generate_time = time.time() - generate_start
             logger.info(f"✅ STEP 10: model.generate() completed in {generate_time:.2f} seconds")
+        
+        # Restore original model state
+        if was_training:
+            self.model.train()
+        if original_gc_state is not None and hasattr(self.model.config, 'gradient_checkpointing'):
+            self.model.config.gradient_checkpointing = original_gc_state
         
         logger.info("🔥 STEP 11: Extracting generated tokens...")
         # Extract only the newly generated tokens
@@ -749,9 +771,10 @@ class QwenPolicy:
             actual_action_starts.append(input_length)
         
         if use_memory_efficient:
-            # Use gradient checkpointing for memory efficiency
-            if hasattr(self.model, 'gradient_checkpointing_enable'):
-                self.model.gradient_checkpointing_enable()
+            # DISABLED: Gradient checkpointing incompatible with Qwen2 KV caching
+            # if hasattr(self.model, 'gradient_checkpointing_enable'):
+            #     self.model.gradient_checkpointing_enable()
+            pass
         
         # Single forward pass with memory optimization
         with torch.cuda.amp.autocast(enabled=False):  # Disable for MPS compatibility

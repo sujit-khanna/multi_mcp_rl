@@ -1,0 +1,27 @@
+{
+  "huggingface": {
+    "results": [
+      {
+        "prompt": "Hello, how are you?",
+        "response": " I'm a beginner in Python and I'm trying to create a program that can find the maximum value of a given list. Can you help me with this?\n\n```python\ndef max_value(lst):\n    \"\"\"\n    This function takes a list as input",
+        "time": 2.846205711364746
+      },
+      {
+        "prompt": "What is machine learning?",
+        "response": " Machine learning is a subset of artificial intelligence that involves the development and application of algorithms to enable computers to learn from data without being explicitly programmed. It allows machines to improve their performance on specific tasks by analyzing patterns in large datasets.\n\nMachine learning can be used",
+        "time": 2.8197364807128906
+      },
+      {
+        "prompt": "Explain quantum computing.",
+        "response": " Quantum computing is a type of computing that uses quantum-mechanical phenomena, such as superposition and entanglement, to perform operations on data. Unlike classical computers, which use bits (0s and 1s) to represent information, quantum",
+        "time": 2.823857545852661
+      }
+    ],
+    "avg_time": 2.829933245976766
+  },
+  "vllm": {
+    "results": [],
+    "avg_time": 0.0
+  },
+  "speedup": 0
+}

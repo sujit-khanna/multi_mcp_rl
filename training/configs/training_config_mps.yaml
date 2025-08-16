@@ -16,7 +16,7 @@ max_sequence_length: 512  # Reduced from 2048
 max_new_tokens: 256  # Limit generation length
 
 # Memory optimization
-gradient_checkpointing: true
+gradient_checkpointing: false  # DISABLED: Incompatible with Qwen2 KV caching
 clear_cache_steps: 10  # Clear more frequently
 eval_batch_size: 1
 eval_steps: 100
@@ -33,12 +33,12 @@ device_config:
 # LoRA mode settings (for MPS)
 lora_mode:
   per_device_train_batch_size: 1
-  gradient_checkpointing: true
+  gradient_checkpointing: false  # DISABLED: Incompatible with Qwen2 KV caching
   fp16: false
   
 full_finetune_mode:
   per_device_train_batch_size: 1
-  gradient_checkpointing: true
+  gradient_checkpointing: false  # DISABLED: Incompatible with Qwen2 KV caching
   bf16: false
   deepspeed_config: null
 
@@ -81,6 +81,6 @@ seed: 42
 
 # Memory optimization
 memory_optimization:
-  gradient_checkpointing: true
+  gradient_checkpointing: false  # DISABLED: Incompatible with Qwen2 KV caching
   clear_cache_steps: 10
   max_memory_mb: 8000  # 8GB limit

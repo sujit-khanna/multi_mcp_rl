@@ -51,7 +51,7 @@ stop_sequences:
 # Full fine-tuning (disabled for MPS)
 full_finetune_mode:
   enabled: false
-  gradient_checkpointing: true
+  gradient_checkpointing: false  # DISABLED: Incompatible with Qwen2 KV caching
   use_flash_attention: false
   bf16: false
   fp16: false
@@ -81,7 +81,7 @@ quantization:
 
 # Training-specific settings
 training:
-  gradient_checkpointing: true
+  gradient_checkpointing: false  # DISABLED: Incompatible with Qwen2 KV caching
   optim: "adamw_torch"  # Standard AdamW for MPS
   use_lora: true
   lora_rank: 16

@@ -92,7 +92,7 @@ fp16_opt_level: "O1"             # Mixed precision optimization level
 half_precision_backend: "auto"    # Backend for mixed precision
 
 # Memory and performance optimization
-gradient_checkpointing: true      # Save memory during backprop
+gradient_checkpointing: false  # DISABLED: Incompatible with Qwen2 KV caching      # Save memory during backprop
 dataloader_prefetch_factor: 2     # Prefetch batches
 max_memory_MB: 40000              # Maximum memory per GPU (40GB A100)
 

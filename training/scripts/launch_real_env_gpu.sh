@@ -156,7 +156,7 @@ max_grad_norm: 1.0
 # GPU-specific settings
 training_mode:
   per_device_train_batch_size: 16  # Maximize A100 GPU utilization
-  gradient_checkpointing: true
+  gradient_checkpointing: false  # DISABLED: Incompatible with Qwen2 KV caching
   fp16: true  # Enable mixed precision
   fp16_opt_level: "O2"  # Aggressive mixed precision
   dataloader_num_workers: 8  # More workers for faster data loading
@@ -223,7 +223,7 @@ device_config:
   
 # Memory optimization for GPU
 memory_optimization:
-  gradient_checkpointing: true
+  gradient_checkpointing: false  # DISABLED: Incompatible with Qwen2 KV caching
   clear_cache_steps: 50  # More frequent cache clearing
   max_memory_mb: null  # No limit, use all available GPU memory
   empty_cache_after_validation: true

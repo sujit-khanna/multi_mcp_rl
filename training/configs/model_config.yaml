@@ -6,8 +6,8 @@ model_revision: "main"  # Use main branch by default
 trust_remote_code: true  # Required for Qwen models
 
 # Model architecture settings (Qwen2.5-0.5B specific)
-max_length: 1024          # Further reduced for MPS memory constraints
-context_length: 1024      # Context window size
+max_length: 512           # CRITICAL FIX: Much shorter to prevent generation hangs
+context_length: 512       # Context window size
 vocab_size: 151936        # Qwen2.5 vocabulary size
 hidden_size: 896          # Model hidden dimension for 0.5B
 num_attention_heads: 14   # Number of attention heads
@@ -21,7 +21,7 @@ use_fast_tokenizer: true
 
 # Generation settings - EMERGENCY FIX for infinite loops
 generation:
-  max_new_tokens: 512     # Increased for longer responses
+  max_new_tokens: 128     # CRITICAL FIX: Much shorter for fast generation
   temperature: 0.05       # EXTREMELY low temperature
   top_p: 0.8             # Focused sampling
   top_k: 10              # VERY focused vocabulary  
@@ -72,7 +72,7 @@ lora_mode:
 # Full Fine-tuning Configuration (for production)
 full_finetune_mode:
   enabled: true               # Set to false for LoRA mode
-  gradient_checkpointing: true # Save memory during backprop
+  gradient_checkpointing: false # DISABLED: Incompatible with Qwen2 KV caching
   use_flash_attention: true   # Use flash attention if available
   bf16: true                 # Use bfloat16 precision
   fp16: false                # Don't use fp16 (conflicts with bf16)

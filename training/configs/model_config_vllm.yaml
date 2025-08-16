@@ -1,0 +1,77 @@
+# Model Configuration for vLLM Integration
+# This configuration file is specifically for vLLM inference integration
+# Does NOT affect the existing training configs
+
+model_name: "Qwen/Qwen2.5-0.5B-Instruct"
+tokenizer_name: "Qwen/Qwen2.5-0.5B-Instruct"
+trust_remote_code: true
+max_length: 2048
+context_length: 2048
+vocab_size: 151936
+hidden_size: 896
+num_attention_heads: 14
+num_hidden_layers: 24
+
+# Tokenizer settings
+padding_side: "left"
+truncation_side: "left"
+add_special_tokens: true
+use_fast_tokenizer: true
+
+stop_sequences:
+  - "</tool_call>"
+  - "</think>"
+  - "</s>"
+  - "<|im_end|>"
+  - "\n\nUser:"
+  - "\n\nHuman:"
+  - "User:"
+  - "Human:"
+
+# Quantization settings for memory efficiency
+quantization:
+  load_in_4bit: true
+  bnb_4bit_compute_dtype: "float16"
+  bnb_4bit_use_double_quant: true
+  bnb_4bit_quant_type: "nf4"
+
+# Memory optimization settings
+memory_optimization:
+  low_cpu_mem_usage: true
+  device_map: null
+  torch_dtype: "float16"
+  attn_implementation: null
+
+# LoRA configuration for efficient fine-tuning
+lora_mode:
+  enabled: true
+  r: 16
+  rank: 16
+  alpha: 32
+  dropout: 0.1
+  target_modules:
+    - "q_proj"
+    - "k_proj"
+    - "v_proj"
+    - "o_proj"
+    - "gate_proj"
+    - "up_proj"
+    - "down_proj"
+  bias: "none"
+  task_type: "CAUSAL_LM"
+
+# Full fine-tuning configuration
+full_finetune_mode:
+  enabled: false
+  gradient_checkpointing: false  # DISABLED: Incompatible with Qwen2 KV caching
+  mixed_precision: "bf16"
+
+# Generation parameters
+generation:
+  temperature: 0.1
+  top_p: 0.9
+  top_k: 50
+  max_new_tokens: 512
+  do_sample: true
+  pad_token_id: 151643
+  eos_token_id: 151645
