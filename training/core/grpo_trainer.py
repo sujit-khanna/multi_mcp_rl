@@ -337,13 +337,19 @@ class GRPOTrainer:
         Returns:
             Dictionary containing training metrics
         """
-        
+
         logger.info(f"Starting train_step with {len(trajectories)} trajectories")
-        
+
         if not trajectories:
             logger.warning("No trajectories provided for training step")
             return {}
-        
+
+        # Ensure model and value head start in training mode
+        self.policy.model.train()
+        if hasattr(self.policy, "value_head"):
+            self.policy.value_head.train()
+        self.policy.enable_training_mode()
+
         # Debug trajectory data
         for i, traj in enumerate(trajectories[:2]):  # Check first 2 trajectories
             logger.info(f"Trajectory {i}: task_id={traj.task_id}, length={traj.length}, "
@@ -391,18 +397,13 @@ class GRPOTrainer:
             
             # Update policy
             logger.info("Updating policy with GRPO...")
-            
+
             # Debug: Check model training state before policy update
             is_training = self.policy.model.training
             trainable_count = sum(1 for p in self.policy.model.parameters() if p.requires_grad)
             logger.info(f"Model training state: {is_training}, trainable params: {trainable_count}")
-
-            # Ensure model and value head are in training mode
             if not is_training:
-                logger.warning("Model not in training mode! Re-enabling...")
-            self.policy.enable_training_mode()
-            if hasattr(self.policy, 'value_head'):
-                self.policy.value_head.train()
+                logger.warning("Model not in training mode during policy update")
 
             policy_metrics = self._update_policy(all_trajectories)
             logger.info("✅ Policy updated successfully")
@@ -647,7 +648,7 @@ class GRPOTrainer:
             
             # Compute reference policy log probabilities for KL penalty
             logger.info("Computing reference policy log probabilities...")
-            with torch.no_grad():
+            with torch.inference_mode():
                 ref_log_probs = self.reference_policy.compute_log_probs(all_states, all_actions)
             logger.info(f"Reference log probs computed: shape={ref_log_probs.shape}")
             
@@ -756,9 +757,9 @@ class GRPOTrainer:
         """Update reference policy using exponential moving average."""
         
         logger.info(f"Updating reference policy at step {self.step_count}")
-        
+
         # EMA update: ref_param = alpha * ref_param + (1 - alpha) * current_param
-        with torch.no_grad():
+        with torch.inference_mode():
             for ref_param, current_param in zip(
                 self.reference_policy.model.parameters(),
                 self.policy.model.parameters()
