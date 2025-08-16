@@ -83,6 +83,11 @@ cd mcp_tools/limited && python fmp_limited_server.py
 python test_critical_fixes.py
 ```
 
+**Test latest critical fixes (V2):**
+```bash
+python test_critical_fixes_v2.py
+```
+
 ### Monitoring Commands
 
 **Monitor GPU usage:**
@@ -217,11 +222,20 @@ python training/tests/memory_profile.py
 - Gradient clipping and KL penalties prevent policy collapse
 
 ### Critical Fixes Applied (August 2024)
+
+**Phase 1 - Basic Training Flow:**
 1. **Forced Tool Call Prevention**: Policy configured with `rl_mode=True` and `force_rate=0.0` to prevent off-policy contamination during RL training
 2. **Training Step Execution**: Added assertions and logging to ensure `trainer.train_step()` is called and returns valid metrics
 3. **Episode Termination**: Reduced max_turns (easy: 5, medium: 8, hard: 10) and improved reward structure to ensure episodes terminate
 4. **WandB Metrics Logging**: Added explicit metric logging with debug pings to ensure training progress is visible in dashboards
 5. **Forced Action Penalties**: Added -0.1 penalty for forced actions when they occur to discourage poor behavior
+
+**Phase 2 - Tool Use & Training Stability:**
+6. **Tool Call Argument Aliasing**: Added normalization for common argument aliases (e.g., `python_code` → `code`) to fix "No tool calls found" issues
+7. **Constrained Prompting**: Simplified system prompt to generate tool calls immediately without `<think>` blocks
+8. **Optimized Generation**: Lower temperature (0.2), shorter responses (512 tokens), additional stop sequences, repetition penalty
+9. **Reference Policy Sync Filter**: Exclude bitsandbytes quantization buffers from reference policy updates
+10. **Rollout Metrics Logging**: Always log environment metrics before training step to ensure WandB visibility
 
 ### MCP Tool Integration
 - Real MCP servers run in `../mcp_tools/limited/` (financial data, web search, Python execution, Slack)

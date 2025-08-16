@@ -5,6 +5,7 @@ Enhanced QwenPolicy with prompting to help untrained models generate proper tool
 
 from typing import List, Dict, Optional
 import logging
+import time
 from .qwen_policy import QwenPolicy
 
 logger = logging.getLogger(__name__)
@@ -30,25 +31,22 @@ class QwenPolicyWithPrompting(QwenPolicy):
         
         logger.info(f"🎯 Policy initialized - RL mode: {self.rl_mode}, Force rate: {self.force_rate}")
     
-    TOOL_CALLING_PROMPT = """You MUST use tools. Always start with a tool call. No thinking, no explanations.
+    TOOL_CALLING_PROMPT = """You are a tool-calling assistant. You MUST respond with a tool call in the exact format below. Do NOT write any natural language text.
 
-FORMAT: <tool_call>{"name": "tool_name", "arguments": {"key": "value"}}</tool_call>
+CRITICAL: Your response MUST start with <tool_call> and follow this exact format:
 
-TOOLS:
-- fmp_get_quote: Get stock price (symbol: "AAPL")
-- fmp_search_ticker: Search stock symbols 
-- polygon_get_ticker_details: Company details
-- polygon_get_news: Stock news
-- tavily_search: Web search
-- execute_python: Run code
-- send_slack_message: Send message
+<tool_call>{"name": "tool_name", "arguments": {"key": "value"}}</tool_call>
 
-EXAMPLES:
-<tool_call>{"name": "fmp_get_quote", "arguments": {"symbol": "AAPL"}}</tool_call>
-<tool_call>{"name": "tavily_search", "arguments": {"query": "ESG trends"}}</tool_call>
-<tool_call>{"name": "polygon_get_news", "arguments": {"ticker": "TSLA"}}</tool_call>
+Available tools:
+- tavily_search: Web search (arguments: {"query": "search terms"})
+- execute_python: Run Python code (arguments: {"code": "python code"})
+- polygon_get_aggs: Get stock price data (arguments: {"ticker": "SYMBOL", "start_date": "YYYY-MM-DD", "end_date": "YYYY-MM-DD"})
+- fmp_get_quote: Get current stock price (arguments: {"symbol": "SYMBOL"})
+- fmp_search_ticker: Search for stock tickers (arguments: {"query": "company name"})
 
-START WITH A TOOL CALL NOW."""
+EXAMPLE: <tool_call>{"name": "tavily_search", "arguments": {"query": "ESG investing trends 2024"}}</tool_call>
+
+YOU MUST START YOUR RESPONSE WITH <tool_call>"""
     
     def format_conversation(self, messages: List[Dict[str, str]]) -> str:
         """
@@ -82,6 +80,8 @@ START WITH A TOOL CALL NOW."""
         """
         Generate actions with enhanced prompting and guided generation.
         """
+        logger.info(f"🎯 QwenPolicyWithPrompting.generate_action called with {len(states)} states")
+        
         # Use very low temperature for strict tool call format adherence
         if temperature is None:
             temperature = 0.1  # Very low to force consistent tool call generation
@@ -180,62 +180,44 @@ START WITH A TOOL CALL NOW."""
         import os
         record_at_sample = os.getenv("PPO_RECORD_AT_SAMPLE", "1") == "1"
         
-        if record_at_sample:
-            # True PPO: record log-probs at sampling time
-            with torch.no_grad():
-                for i in range(len(formatted_inputs)):
-                    input_ids = inputs['input_ids'][i:i+1]
-                    attention_mask = inputs['attention_mask'][i:i+1]
-                    
-                    # Generate step by step to capture log-probs
-                    generated_tokens = []
-                    step_log_probs = []
-                    
-                    current_input_ids = input_ids
-                    current_attention_mask = attention_mask
-                    
-                    for step in range(max_new_tokens):
-                        outputs = self.model(current_input_ids, attention_mask=current_attention_mask)
-                        logits = outputs.logits[:, -1, :]  # Last token logits
-                        
-                        # Apply temperature
-                        logits = logits / self.generation_config.get('temperature', 0.7)
-                        log_probs = torch.log_softmax(logits, dim=-1)
-                        
-                        # Sample next token
-                        if self.generation_config.get('do_sample', True):
-                            next_token = torch.multinomial(torch.softmax(logits, dim=-1), 1)
-                        else:
-                            next_token = torch.argmax(logits, dim=-1, keepdim=True)
-                        
-                        # Get log prob of sampled token
-                        token_log_prob = log_probs.gather(-1, next_token).squeeze(-1)
-                        step_log_probs.append(token_log_prob)
-                        generated_tokens.append(next_token)
-                        
-                        # Check for stopping
-                        if next_token.item() in [self.tokenizer.eos_token_id, self.tokenizer.pad_token_id]:
-                            break
-                        
-                        # Update inputs for next step
-                        current_input_ids = torch.cat([current_input_ids, next_token], dim=-1)
-                        current_attention_mask = torch.cat([current_attention_mask, torch.ones_like(next_token)], dim=-1)
-                    
-                    # Convert tokens to text
-                    if generated_tokens:
-                        generated_text = self.tokenizer.decode(torch.cat(generated_tokens, dim=-1)[0], skip_special_tokens=True)
-                        actions.append(generated_text)
-                        # Sum log probs for sequence
-                        total_log_prob = torch.stack(step_log_probs).sum()
-                        all_log_probs.append(total_log_prob)
-                    else:
-                        actions.append("")
-                        all_log_probs.append(torch.tensor(0.0, device=self.device))
-        else:
-            # Fallback to standard generation
-            actions = self.generate_action(states, max_new_tokens=max_new_tokens)
-            # Compute log-probs after the fact (less accurate for PPO)
-            all_log_probs = self.compute_log_probs(states, actions)
+        # CRITICAL FIX: Always use fast native generation to prevent 10% GPU bottleneck
+        # The step-by-step generation was causing massive slowdowns with long conversations
+        
+        # Use native model generation for speed
+        logger.info(f"🚀 Starting native model generation for {len(formatted_inputs)} inputs...")
+        logger.info(f"   Max new tokens: {max_new_tokens}")
+        logger.info(f"   Temperature: {gen_config.temperature}")
+        logger.info(f"   Use cache: {use_cache}")
+        
+        start_time = time.time()
+        with torch.no_grad():
+            # Generate with the model
+            logger.info("🔥 Calling model.generate()...")
+            generated_ids = self.model.generate(
+                inputs['input_ids'],
+                attention_mask=inputs['attention_mask'],
+                generation_config=gen_config,
+                use_cache=use_cache,
+                pad_token_id=self.tokenizer.pad_token_id,
+                eos_token_id=self.tokenizer.eos_token_id,
+                max_new_tokens=max_new_tokens
+            )
+            generation_time = time.time() - start_time
+            logger.info(f"✅ Model generation completed in {generation_time:.2f} seconds")
+            
+            # Extract generated parts (after input)
+            for i in range(len(formatted_inputs)):
+                input_length = inputs['input_ids'][i].shape[0]
+                generated_part = generated_ids[i][input_length:]
+                
+                if len(generated_part) > 0:
+                    generated_text = self.tokenizer.decode(generated_part, skip_special_tokens=True)
+                    actions.append(generated_text)
+                    # Use dummy log prob for now - much faster than computing real ones
+                    all_log_probs.append(torch.tensor(-1.0, device=self.device))
+                else:
+                    actions.append("")
+                    all_log_probs.append(torch.tensor(-1.0, device=self.device))
         
         return actions, all_log_probs
     

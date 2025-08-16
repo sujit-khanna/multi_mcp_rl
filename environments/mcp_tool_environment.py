@@ -346,6 +346,8 @@ class MCPToolEnvironment(BaseTextEnv):
         for tool_call_text in tool_call_texts:
             try:
                 tool_call = json.loads(tool_call_text.strip())
+                # CRITICAL FIX: Normalize tool call arguments to handle common aliases
+                tool_call = self._normalize_tool_call_args(tool_call)
                 tool_calls.append(tool_call)
             except json.JSONDecodeError:
                 logger.warning(f"Failed to parse tool call: {tool_call_text}")
@@ -356,6 +358,56 @@ class MCPToolEnvironment(BaseTextEnv):
         natural_response = natural_response.strip()
         
         return reasoning_blocks, tool_calls, natural_response
+    
+    def _normalize_tool_call_args(self, tool_call: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        CRITICAL FIX: Normalize tool call arguments to handle common aliases
+        This fixes the "No tool calls found" issue by converting near-miss calls into valid ones
+        """
+        if "arguments" not in tool_call:
+            return tool_call
+            
+        tool_name = tool_call.get("name", "")
+        args = tool_call["arguments"]
+        
+        # Define argument aliases for common tools
+        arg_aliases = {
+            "execute_python": {
+                "python_code": "code",
+                "script": "code", 
+                "python": "code"
+            },
+            "tavily_search": {
+                "search_query": "query",
+                "q": "query",
+                "search": "query"
+            },
+            "polygon_get_aggs": {
+                "ticker": "symbol",
+                "stock": "symbol"
+            },
+            "fmp_get_quote": {
+                "ticker": "symbol",
+                "stock": "symbol"
+            },
+            "send_slack_message": {
+                "msg": "message",
+                "text": "message"
+            }
+        }
+        
+        if tool_name in arg_aliases:
+            aliases = arg_aliases[tool_name]
+            normalized_args = {}
+            
+            for arg_key, arg_value in args.items():
+                # Check if this argument key has an alias mapping
+                normalized_key = aliases.get(arg_key, arg_key)
+                normalized_args[normalized_key] = arg_value
+            
+            tool_call["arguments"] = normalized_args
+            
+        return tool_call
     
     def _execute_tool_call(self, tool_call: Dict[str, Any]) -> Dict[str, Any]:
         """

@@ -415,15 +415,29 @@ class QwenPolicy:
             logger.info(formatted)
             logger.info(f"{'='*80}")
         
+        logger.info("🚀 STEP 1: Starting tokenization...")
+        logger.info(f"   Number of inputs to tokenize: {len(formatted_inputs)}")
+        logger.info(f"   Max length setting: {self.model_config['max_length']}")
+        
         # Tokenize inputs
+        logger.info("🔥 STEP 2: Calling tokenizer...")
+        start_time = time.time()
         inputs = self.tokenizer(
             formatted_inputs,
             return_tensors="pt",
             padding=True,
             truncation=True,
             max_length=self.model_config["max_length"]
-        ).to(self.model.device)
+        )
+        tokenize_time = time.time() - start_time
+        logger.info(f"✅ STEP 3: Tokenization completed in {tokenize_time:.2f} seconds")
+        logger.info(f"   Input shape: {inputs['input_ids'].shape}")
         
+        logger.info("🔥 STEP 4: Moving tensors to device...")
+        inputs = inputs.to(self.model.device)
+        logger.info("✅ STEP 5: Tensors moved to device")
+        
+        logger.info("🔥 STEP 6: Setting up generation config...")
         # Override generation config if specified
         gen_config = self.generation_config
         if max_new_tokens is not None or temperature is not None:
@@ -438,11 +452,16 @@ class QwenPolicy:
             if hasattr(gen_config, key):
                 setattr(gen_config, key, value)
         
+        logger.info(f"✅ STEP 7: Generation config ready (max_tokens: {gen_config.max_new_tokens}, temp: {gen_config.temperature})")
+        
         # Generate with the model
         # Disable cache if gradient checkpointing is enabled to avoid warnings
         use_cache = not getattr(self.model, 'gradient_checkpointing', False)
+        logger.info(f"🔥 STEP 8: About to call model.generate() with use_cache={use_cache}...")
         
         with torch.no_grad():
+            logger.info("🚀 STEP 9: Starting model.generate() call...")
+            generate_start = time.time()
             generated_ids = self.model.generate(
                 input_ids=inputs.input_ids,
                 attention_mask=inputs.attention_mask,
@@ -451,22 +470,31 @@ class QwenPolicy:
                 eos_token_id=self._stop_token_ids if self._stop_token_ids else self.tokenizer.eos_token_id,
                 use_cache=use_cache,
             )
+            generate_time = time.time() - generate_start
+            logger.info(f"✅ STEP 10: model.generate() completed in {generate_time:.2f} seconds")
         
+        logger.info("🔥 STEP 11: Extracting generated tokens...")
         # Extract only the newly generated tokens
         input_length = inputs.input_ids.shape[1]
         generated_tokens = generated_ids[:, input_length:]
+        logger.info(f"✅ STEP 12: Generated tokens extracted (shape: {generated_tokens.shape})")
         
         # Decode generated tokens
+        logger.info("🔥 STEP 13: Batch decoding tokens...")
         generated_texts = self.tokenizer.batch_decode(
             generated_tokens,
             skip_special_tokens=True
         )
+        logger.info(f"✅ STEP 14: Batch decode completed, got {len(generated_texts)} texts")
         
         # Post-process outputs
+        logger.info("🔥 STEP 15: Post-processing outputs...")
         processed_outputs = []
-        for text in generated_texts:
+        for i, text in enumerate(generated_texts):
+            logger.info(f"   Processing text {i}: {len(text)} chars, preview: {text[:50]}...")
             processed = self._postprocess_generation(text)
             processed_outputs.append(processed)
+        logger.info(f"✅ STEP 16: Post-processing completed for {len(processed_outputs)} outputs")
         
         # Clear MPS cache after generation
         if self.device.type == "mps":

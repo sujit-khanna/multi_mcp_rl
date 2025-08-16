@@ -13,6 +13,7 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional, Any, Callable, Tuple
 import warnings
+import numpy as np
 
 import torch
 import numpy as np
@@ -142,12 +143,12 @@ class TrajectoryCollector:
         self,
         policy,  # QwenPolicy instance
         env_factory: Callable[[Dict[str, Any]], Any],  # Function that creates MCPToolEnvironment
-        num_parallel_envs: int = 4,
+        num_parallel_envs: int = 1,  # CRITICAL FIX: Reduced from 4 to 1 to prevent deadlock
         shared_tool_manager: Any = None,  # SimpleSharedManager instance
         max_episode_length: int = 15,
         retry_failed_episodes: bool = True,
         collect_log_probs: bool = True,
-        executor_max_workers: int = 8,
+        executor_max_workers: int = 1,  # CRITICAL FIX: Reduced from 8 to 1 to prevent deadlock
     ):
         """Initialize the trajectory collector."""
         
@@ -385,6 +386,9 @@ class TrajectoryCollector:
             Dictionary with trajectory data and episode statistics
         """
         
+        logger.info(f"🎮 Starting episode run for task {task_id}")
+        logger.info(f"   Max episode length: {self.max_episode_length}")
+        
         trajectory = []
         total_reward = 0.0
         turn = 0
@@ -399,12 +403,24 @@ class TrajectoryCollector:
         try:
             while not done and turn < self.max_episode_length:
                 turn += 1
+                logger.info(f"🔄 Episode {task_id} - Turn {turn}/{self.max_episode_length}")
                 
                 # Generate action using policy
+                logger.info(f"⚡ Generating action for turn {turn}...")
                 action = await self._generate_action(conversation_history)
+                logger.info(f"📝 Generated action length: {len(action)} chars")
+                logger.info(f"   Action preview: {action[:100]}...")
+                
+                # CRITICAL FIX: Check for repetitive generation and terminate early
+                if self._is_repetitive_generation(action):
+                    logger.warning(f"⚠️ Detected repetitive generation, terminating episode early")
+                    done = True
+                    break
                 
                 # Execute action in environment
+                logger.info(f"🔧 Executing action in environment...")
                 step_result = await self._execute_environment_step(env, action)
+                logger.info(f"✅ Environment step completed")
                 
                 # Extract step data
                 observation = step_result.get("observation", "")
@@ -525,13 +541,30 @@ class TrajectoryCollector:
         """Generate action using policy."""
         
         try:
-            # Run policy generation in executor to avoid blocking
+            # Run policy generation in executor with timeout to avoid blocking
             states = [conversation_history]
-            actions = await asyncio.get_event_loop().run_in_executor(
-                self.executor,
-                self.policy.generate_action,
-                states
-            )
+            logger.info("🎯 TrajectoryCollector._generate_action starting...")
+            logger.info(f"   Conversation history length: {len(conversation_history)} messages")
+            logger.info(f"   Executor max workers: {self.executor._max_workers}")
+            
+            # Add timeout to prevent infinite hangs
+            try:
+                logger.info("📞 Submitting policy.generate_action to executor...")
+                start_time = time.time()
+                actions = await asyncio.wait_for(
+                    asyncio.get_event_loop().run_in_executor(
+                        self.executor,
+                        self.policy.generate_action,
+                        states
+                    ),
+                    timeout=600.0  # 10 minute timeout for policy generation
+                )
+                execution_time = time.time() - start_time
+                logger.info(f"✅ Policy generation completed in {execution_time:.2f} seconds")
+                logger.info(f"   Generated {len(actions)} actions")
+            except asyncio.TimeoutError:
+                logger.error("⏰ Policy generation timed out after 600 seconds")
+                return "ERROR: Policy generation timed out"
             
             if actions and len(actions) > 0:
                 return actions[0]
@@ -542,6 +575,32 @@ class TrajectoryCollector:
         except Exception as e:
             logger.error(f"Error generating action: {e}")
             return f"Error generating action: {str(e)}"
+    
+    def _is_repetitive_generation(self, text: str) -> bool:
+        """Detect if the generated text contains excessive repetition."""
+        if len(text) < 100:
+            return False
+        
+        # Check for repeated phrases (common in broken generation)
+        words = text.split()
+        if len(words) < 20:
+            return False
+        
+        # Look for repeated sequences of 3+ words
+        for i in range(len(words) - 6):
+            phrase = ' '.join(words[i:i+3])
+            rest_text = ' '.join(words[i+3:])
+            if rest_text.count(phrase) >= 3:  # Same phrase repeated 3+ times
+                logger.debug(f"Detected repetitive phrase: '{phrase}'")
+                return True
+        
+        # Check for high ratio of repeated tokens
+        unique_words = set(words)
+        if len(words) > 50 and len(unique_words) / len(words) < 0.3:  # Less than 30% unique words
+            logger.debug(f"Low word diversity: {len(unique_words)}/{len(words)} = {len(unique_words)/len(words):.2f}")
+            return True
+        
+        return False
     
     async def _execute_environment_step(
         self,
@@ -554,10 +613,9 @@ class TrajectoryCollector:
             # Check if policy indicates this action was forced
             forced_action = False
             if hasattr(self.policy, 'last_forced_mask') and self.policy.last_forced_mask:
-                # Get the forced status for the current action index
-                action_idx = len(trajectory) if trajectory else 0
-                if action_idx < len(self.policy.last_forced_mask):
-                    forced_action = self.policy.last_forced_mask[action_idx]
+                # Use the last forced mask entry (most recent action)
+                if len(self.policy.last_forced_mask) > 0:
+                    forced_action = self.policy.last_forced_mask[-1]
             
             # Set forced action flag on environment before step
             if hasattr(env, '_last_action_was_forced'):

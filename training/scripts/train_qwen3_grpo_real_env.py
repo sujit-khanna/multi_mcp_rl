@@ -162,7 +162,7 @@ class RealEnvironmentGRPOTrainer:
         # Environment configuration
         configs['environment'] = main_config.get('environment', {
             'num_parallel_envs': 4,
-            'max_episode_length': 8,  # Reduced to prevent timeouts with untrained model
+            'max_episode_length': 3,  # CRITICAL FIX: Very short episodes to prevent repetitive generation
             'retry_failed_episodes': False,  # Disable retries for faster iteration
             'collect_log_probs': True
         })
@@ -649,11 +649,12 @@ class RealEnvironmentGRPOTrainer:
         self.trajectory_collector = TrajectoryCollector(
             policy=self.policy,
             env_factory=env_factory,
-            num_parallel_envs=env_config.get('num_parallel_envs', 4),
+            num_parallel_envs=1,  # CRITICAL FIX: Force single environment to prevent deadlock
             shared_tool_manager=self.shared_tool_manager,
             max_episode_length=env_config.get('max_episode_length', 15),
             retry_failed_episodes=env_config.get('retry_failed_episodes', True),
-            collect_log_probs=env_config.get('collect_log_probs', True)
+            collect_log_probs=env_config.get('collect_log_probs', True),
+            executor_max_workers=1  # CRITICAL FIX: Force single worker to prevent deadlock
         )
         
         logger.info("✅ Real environment setup complete!")
@@ -835,6 +836,27 @@ class RealEnvironmentGRPOTrainer:
                 logger.warning(f"No valid trajectories collected for batch {batch_idx}")
                 continue
             
+            # CRITICAL FIX: Log rollout metrics BEFORE training step to ensure they always appear
+            if self.use_wandb:
+                # Calculate rollout statistics
+                trajectory_rewards = [traj.total_reward for traj in trajectories]
+                trajectory_lengths = [len(traj.actions) for traj in trajectories]
+                total_tool_calls = sum(1 for traj in trajectories for action in traj.actions if '<tool_call>' in action)
+                total_actions = sum(len(traj.actions) for traj in trajectories)
+                
+                rollout_metrics = {
+                    'rollout/num_trajectories': len(trajectories),
+                    'rollout/mean_reward': np.mean(trajectory_rewards) if trajectory_rewards else 0.0,
+                    'rollout/std_reward': np.std(trajectory_rewards) if trajectory_rewards else 0.0,
+                    'rollout/mean_length': np.mean(trajectory_lengths) if trajectory_lengths else 0.0,
+                    'rollout/tool_calls_per_action': total_tool_calls / max(total_actions, 1),
+                    'rollout/episodes_terminated': sum(1 for traj in trajectories if any(traj.dones)),
+                    'step': self.global_step
+                }
+                
+                self._log_wandb(rollout_metrics, step=self.global_step, commit=False)
+                logger.info(f"📊 ROLLOUT METRICS LOGGED: {rollout_metrics}")
+            
             # Training step
             try:
                 logger.info(f"🔥 CALLING TRAINER.TRAIN_STEP WITH {len(trajectories)} TRAJECTORIES")
@@ -877,12 +899,18 @@ class RealEnvironmentGRPOTrainer:
                     }
                     self._log_wandb(core_metrics, step=self.global_step, commit=False)
 
+                logger.info(f"🚀 MAIN TRAINING LOOP - Step {step}")
+                logger.info(f"   Batch size: {batch_size}")
+                logger.info(f"   Global step: {self.global_step}")
+                
                 # COMPREHENSIVE LOGGING: Log all training metrics to WandB/Weave
+                logger.info("📊 Logging comprehensive training metrics...")
                 comprehensive_metrics = self._log_comprehensive_training_metrics(
                     training_metrics=metrics,
                     trajectories=trajectories, 
                     step=self.global_step
                 )
+                logger.info("✅ Training metrics logged")
                 
                 # Update local epoch metrics for summary
                 for key in ['policy_loss', 'value_loss', 'kl_divergence', 'grad_norm']:

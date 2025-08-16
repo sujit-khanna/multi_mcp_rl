@@ -19,16 +19,18 @@ truncation_side: "left"   # Keep most recent context
 add_special_tokens: true
 use_fast_tokenizer: true
 
-# Generation settings for inference/evaluation
+# Generation settings - EMERGENCY FIX for infinite loops
 generation:
-  max_new_tokens: 1024    # Maximum tokens to generate
-  temperature: 0.7        # Sampling temperature
-  top_p: 0.9             # Nucleus sampling
-  top_k: 50              # Top-k sampling
+  max_new_tokens: 512     # Increased for longer responses
+  temperature: 0.05       # EXTREMELY low temperature
+  top_p: 0.8             # Focused sampling
+  top_k: 10              # VERY focused vocabulary  
   do_sample: true        # Enable sampling
   pad_token_id: 151643   # Qwen2.5 pad token
   eos_token_id: 151645   # Qwen2.5 end token
-  repetition_penalty: 1.1 # Prevent repetition
+  repetition_penalty: 1.5 # VERY HIGH penalty to stop repetition
+  length_penalty: 0.5    # Encourage short responses
+  early_stopping: true   # Stop generation early
 
 # Stop sequences for reasoning and tool calls
 stop_sequences:

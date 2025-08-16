@@ -9,6 +9,10 @@ stop_sequences:
   - "</think>"
   - "</s>"
   - "<|im_end|>"
+  - "\n\nUser:"
+  - "\n\nHuman:"
+  - "User:"
+  - "Human:"
 
 # Quantization settings for memory efficiency
 quantization:
@@ -40,15 +44,18 @@ full_finetune_mode:
   gradient_checkpointing: true
   mixed_precision: "bf16"
 
-# Generation parameters
+# Generation parameters - EMERGENCY FIX for infinite generation
 generation:
-  temperature: 0.7
-  top_p: 0.9
-  top_k: 50
-  max_new_tokens: 2048
+  temperature: 0.05  # EXTREMELY low temperature 
+  top_p: 0.8  # Very focused
+  top_k: 10  # Extremely focused vocabulary
+  max_new_tokens: 128  # VERY short to force quick responses
   do_sample: true
   pad_token_id: 151643  # Qwen specific
   eos_token_id: 151645  # Qwen specific
+  repetition_penalty: 1.2  # VERY high penalty to stop repetition
+  length_penalty: 0.5  # Strong bias toward short responses
+  early_stopping: true  # Stop generation early
 
 # Model-specific settings for Qwen3-0.6B
 model_specifics:
