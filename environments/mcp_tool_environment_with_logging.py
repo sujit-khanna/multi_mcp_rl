@@ -20,12 +20,22 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+# Prompt template to ensure agents always emit valid tool calls
+TOOL_CALL_PROMPT_TEMPLATE = (
+    "You MUST respond with a tool call using the exact syntax: "
+    "<tool_call>{\"name\": \"tool_name\", \"arguments\": {\"key\": \"value\"}}</tool_call>. "
+    "The <tool_call> tag must appear as the first token in your response and no natural language should appear outside these tags."
+)
+
+
 class MCPToolEnvironmentWithLogging(BaseMCPToolEnvironment):
     """MCPToolEnvironment with comprehensive logging of tool execution"""
-    
+
     def __init__(self, task_data: Dict[str, Any]):
         """Initialize with enhanced logging"""
         super().__init__(task_data)
+        # Expose the strict tool call prompt for any integrated policies
+        self.tool_call_prompt_template = TOOL_CALL_PROMPT_TEMPLATE
         self.tool_execution_log = []
         logger.info(f"🔧 INITIALIZED ENVIRONMENT for task: {self.task_id}")
         logger.info(f"   User query: {self.user_query[:100]}...")
