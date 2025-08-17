@@ -82,6 +82,9 @@ class VLLMQwenPolicy:
         self.model_name = model_name
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
+        # Add required attributes for GRPO trainer compatibility
+        self.use_lora = False  # We're using full model, not LoRA
+        
         # Initialize vLLM if available
         if VLLM_AVAILABLE and os.getenv("ENABLE_VLLM", "false").lower() == "true":
             self.use_vllm = True
@@ -411,8 +414,8 @@ async def main():
     training_config = config.get("training", {})
     model_config = config.get("model", {})
     
-    # Initialize reference policy (copy of main policy)
-    reference_policy = copy.deepcopy(policy)
+    # Initialize reference policy (reuse main policy to avoid GPU memory issues with dual vLLM instances)
+    reference_policy = policy  # Share the same policy to avoid dual GPU memory allocation
     
     # Setup GRPO config
     grpo_config = {
