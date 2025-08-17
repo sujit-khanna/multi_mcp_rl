@@ -401,29 +401,47 @@ async def main():
     from environments.simple_shared_manager import SimpleSharedManager
     from environments.mcp_tool_environment import MCPToolEnvironment
     
-    # Setup environment
+    # Setup environment factory function
     tool_manager = SimpleSharedManager()
-    env = MCPToolEnvironment()
+    
+    def env_factory(task_data):
+        return MCPToolEnvironment(task_data=task_data)
     
     # Setup training config
     training_config = config.get("training", {})
     model_config = config.get("model", {})
     
+    # Initialize reference policy (copy of main policy)
+    reference_policy = copy.deepcopy(policy)
+    
+    # Setup GRPO config
+    grpo_config = {
+        "learning_rate": float(training_config.get("learning_rate", 5e-6)),
+        "batch_size": training_config.get("batch_size", 1),
+        "kl_coeff": float(training_config.get("kl_coeff", 0.01)),
+        "gamma": float(training_config.get("gamma", 0.99)),
+        "lam": float(training_config.get("lam", 0.95)),
+        "clip_ratio": float(training_config.get("clip_ratio", 0.2)),
+        "value_loss_coeff": float(training_config.get("value_loss_coeff", 0.5)),
+        "entropy_coeff": float(training_config.get("entropy_coeff", 0.01))
+    }
+    
     # Initialize GRPO trainer (using working trainer)
     trainer = GRPOTrainerGradientFix(
-        learning_rate=float(training_config.get("learning_rate", 5e-6)),
-        batch_size=training_config.get("batch_size", 1),
-        kl_coeff=float(training_config.get("kl_coeff", 0.01)),
-        gamma=float(training_config.get("gamma", 0.99)),
-        lam=float(training_config.get("lam", 0.95))
+        policy=policy,
+        reference_policy=reference_policy,
+        grpo_config=grpo_config,
+        training_config=training_config,
+        device=torch.device(args.device),
+        enable_mixed_precision=(args.mixed_precision == "fp16")
     )
     
     # Initialize trajectory collector
     collector = TrajectoryCollector(
-        env=env,
         policy=policy,
-        num_workers=training_config.get("num_workers", 4),
-        max_trajectory_length=training_config.get("max_trajectory_length", 10)
+        env_factory=env_factory,
+        num_parallel_envs=training_config.get("num_workers", 1),  # Reduced for stability
+        shared_tool_manager=tool_manager
     )
     
     logger.info("🎯 Starting training loop...")
