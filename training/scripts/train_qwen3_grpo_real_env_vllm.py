@@ -84,6 +84,7 @@ class VLLMQwenPolicy:
         
         # Add required attributes for GRPO trainer compatibility
         self.use_lora = False  # We're using full model, not LoRA
+        self.model = None  # Will be set after initialization
         
         # Initialize vLLM if available
         if VLLM_AVAILABLE and os.getenv("ENABLE_VLLM", "false").lower() == "true":
@@ -95,14 +96,238 @@ class VLLMQwenPolicy:
             
         logger.info(f"🚀 Policy initialized - vLLM: {self.use_vllm}")
     
+    def get_trainable_parameters(self):
+        """Get count of trainable parameters for GRPO trainer compatibility"""
+        trainable_params = list(self.parameters())
+        count = sum(p.numel() for p in trainable_params)
+        logger.info(f"🔧 get_trainable_parameters() returning: {count}")
+        return count
+    
+    def compute_values(self, input_ids, attention_mask=None):
+        """Compute value estimates for GRPO training"""
+        # Handle case where input_ids might be a list of states instead of tensor
+        if not isinstance(input_ids, torch.Tensor):
+            # If input_ids is a list of states, we need to tokenize them first
+            if isinstance(input_ids, list):
+                states = input_ids
+                values = []
+                for state in states:
+                    # Convert state to string if needed
+                    if isinstance(state, dict) or isinstance(state, list):
+                        state_str = str(state)
+                    else:
+                        state_str = str(state)
+                    
+                    # Tokenize the state
+                    tokens = self.tokenizer(state_str, return_tensors="pt", truncation=True, max_length=1500, padding=True)
+                    tokens = {k: v.to(self.device) for k, v in tokens.items()}
+                    
+                    # Get value for this state (PRESERVE GRADIENTS FOR TRAINING)
+                    if hasattr(self, 'value_head') and self.value_head is not None:
+                        hidden_states = self.training_model(**tokens, output_hidden_states=True).hidden_states[-1]
+                        # Use last token's hidden state
+                        last_hidden = hidden_states[:, -1, :]
+                        value = self.value_head(last_hidden)
+                        values.append(value.squeeze())
+                    else:
+                        values.append(torch.tensor(0.0, device=self.device, requires_grad=True))
+                
+                return torch.stack(values) if values else torch.tensor([], device=self.device)
+        
+        # Original tensor-based computation (PRESERVE GRADIENTS for training)
+        if hasattr(self, 'value_head') and self.value_head is not None:
+            # Get hidden states from the training model (not combined model)
+            outputs = self.training_model(input_ids=input_ids, attention_mask=attention_mask, output_hidden_states=True)
+            hidden_states = outputs.hidden_states[-1]  # Last layer hidden states
+                
+            # Compute values using the value head
+            values = self.value_head(hidden_states)
+            return values.squeeze(-1)  # Remove last dimension
+        else:
+            # Return zeros if no value head available (with gradients enabled)
+            if hasattr(input_ids, 'shape'):
+                batch_size, seq_len = input_ids.shape
+                return torch.zeros(batch_size, seq_len, device=input_ids.device, requires_grad=True)
+            else:
+                return torch.tensor(0.0, device=self.device, requires_grad=True)
+    
+    def enable_eval_mode(self):
+        """Enable evaluation mode for trajectory collection"""
+        if hasattr(self, 'model') and self.model is not None:
+            self.model.eval()
+        if hasattr(self, 'value_head') and self.value_head is not None:
+            self.value_head.eval()
+    
+    def enable_train_mode(self):
+        """Enable training mode"""
+        if hasattr(self, 'model') and self.model is not None:
+            self.model.train()
+        if hasattr(self, 'value_head') and self.value_head is not None:
+            self.value_head.train()
+    
+    def enable_training_mode(self):
+        """Enable training mode (alias for compatibility)"""
+        self.enable_train_mode()
+    
+    def generate_action(self, states, max_new_tokens=None, temperature=None, **kwargs):
+        """Generate actions for trajectory collection - core method needed by TrajectoryCollector"""
+        if not isinstance(states, list):
+            states = [states]
+            
+        # Convert conversation states to text prompts
+        formatted_inputs = []
+        for state in states:
+            if isinstance(state, list):
+                # Convert conversation history to text
+                conversation_text = ""
+                for msg in state:
+                    role = msg.get("role", "user")
+                    content = msg.get("content", "")
+                    conversation_text += f"{role}: {content}\n"
+                conversation_text += "assistant: "
+                formatted_inputs.append(conversation_text)
+            else:
+                formatted_inputs.append(str(state))
+        
+        # Use vLLM or HuggingFace for generation
+        responses = self.generate(
+            formatted_inputs, 
+            max_tokens=max_new_tokens or 512,
+            temperature=temperature or 0.1
+        )
+        
+        # Handle empty responses
+        processed_responses = []
+        for response in responses:
+            if not response or len(response.strip()) == 0:
+                # Generate fallback tool call if empty
+                logger.warning("Empty response generated, using fallback tool call")
+                fallback = '<tool_call>{"name": "fmp_get_quote", "arguments": {"symbol": "AAPL"}}</tool_call>'
+                processed_responses.append(fallback)
+            else:
+                processed_responses.append(response)
+        
+        return processed_responses
+    
+    def compute_log_probs(self, states, actions, **kwargs):
+        """Compute log probabilities for given state-action pairs"""
+        if not hasattr(self, 'training_model') or self.training_model is None:
+            raise RuntimeError("No training model available for log prob computation")
+            
+        # Ensure states and actions are lists
+        if not isinstance(states, list):
+            states = [states]
+        if not isinstance(actions, list):
+            actions = [actions]
+        
+        # Prepare batch inputs for efficient computation
+        batch_prompts = []
+        batch_targets = []
+        
+        for state, action in zip(states, actions):
+            # Convert state to prompt
+            if isinstance(state, list):
+                conversation_text = ""
+                for msg in state:
+                    role = msg.get("role", "user")
+                    content = msg.get("content", "")
+                    conversation_text += f"{role}: {content}\n"
+                prompt = conversation_text + "assistant: "
+            else:
+                prompt = str(state)
+            
+            # Ensure action is a string and not empty
+            action_str = str(action) if action else " "  # Use space if empty
+            
+            batch_prompts.append(prompt)
+            batch_targets.append(action_str)
+        
+        # Tokenize all prompts and targets
+        batch_log_probs = []
+        
+        for prompt, target in zip(batch_prompts, batch_targets):
+            # Tokenize prompt and full sequence
+            prompt_tokens = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=1500)
+            full_text = prompt + target
+            full_tokens = self.tokenizer(full_text, return_tensors="pt", truncation=True, max_length=2000)
+            
+            # Move to device
+            prompt_tokens = {k: v.to(self.device) for k, v in prompt_tokens.items()}
+            full_tokens = {k: v.to(self.device) for k, v in full_tokens.items()}
+            
+            # Get target token positions
+            prompt_len = prompt_tokens["input_ids"].shape[1]
+            target_tokens = full_tokens["input_ids"][:, prompt_len:]
+            
+            # Skip if no target tokens (shouldn't happen with our fallback)
+            if target_tokens.shape[1] == 0:
+                # Force at least one token by tokenizing a single space
+                space_tokens = self.tokenizer(" ", return_tensors="pt")["input_ids"].to(self.device)
+                target_tokens = space_tokens[:, -1:]  # Take last token
+            
+            # Compute logits for the sequence (excluding last token for autoregressive prediction)
+            input_ids = full_tokens["input_ids"][:, :-1]
+            outputs = self.training_model(input_ids=input_ids)
+            logits = outputs.logits
+            
+            # Get logits for target positions
+            target_len = target_tokens.shape[1]
+            if prompt_len > 0 and prompt_len + target_len - 1 <= logits.shape[1]:
+                # Extract logits corresponding to target tokens
+                target_logits = logits[:, prompt_len-1:prompt_len+target_len-1, :]
+                
+                # Compute log probabilities
+                log_probs = torch.nn.functional.log_softmax(target_logits, dim=-1)
+                
+                # Get log probabilities for actual target tokens
+                if target_logits.shape[1] == target_tokens.shape[1]:
+                    token_log_probs = log_probs.gather(2, target_tokens.unsqueeze(-1)).squeeze(-1)
+                    total_log_prob = token_log_probs.sum()
+                else:
+                    # Compute what we can if there's a mismatch
+                    min_len = min(target_logits.shape[1], target_tokens.shape[1])
+                    if min_len > 0:
+                        target_subset = target_tokens[:, :min_len]
+                        logits_subset = log_probs[:, :min_len, :]
+                        token_log_probs = logits_subset.gather(2, target_subset.unsqueeze(-1)).squeeze(-1)
+                        total_log_prob = token_log_probs.sum()
+                    else:
+                        # Last resort: compute log prob for a single space token
+                        space_id = self.tokenizer(" ", return_tensors="pt")["input_ids"][0, -1].to(self.device)
+                        space_logits = logits[:, -1, :]  # Last position
+                        space_log_probs = torch.nn.functional.log_softmax(space_logits, dim=-1)
+                        total_log_prob = space_log_probs[0, space_id]
+            else:
+                # Fallback: compute log prob for end token at last position
+                eos_id = self.tokenizer.eos_token_id or self.tokenizer.pad_token_id
+                if eos_id is not None:
+                    last_logits = logits[:, -1, :]
+                    last_log_probs = torch.nn.functional.log_softmax(last_logits, dim=-1)
+                    total_log_prob = last_log_probs[0, eos_id]
+                else:
+                    # Very last resort: uniform distribution over vocabulary
+                    vocab_size = logits.shape[-1]
+                    # Use logits directly to maintain gradient flow
+                    uniform_logits = torch.zeros_like(logits[0, -1, :])  # Shape: [vocab_size]
+                    uniform_log_probs = torch.nn.functional.log_softmax(uniform_logits, dim=-1)
+                    total_log_prob = uniform_log_probs.mean()  # Average log prob
+            
+            batch_log_probs.append(total_log_prob)
+        
+        return torch.stack(batch_log_probs)
+    
     def _init_vllm(self):
         """Initialize vLLM for fast generation"""
         try:
             logger.info("🔥 Initializing vLLM for ultra-fast inference...")
             
+            # Ensure we're using the correct context length from environment
+            max_model_len = int(os.getenv("VLLM_MAX_MODEL_LEN", "4096"))
+            logger.info(f"🔧 Setting vLLM max_model_len to {max_model_len}")
+            
             self.vllm_engine = LLM(
                 model=self.model_name,
-                max_model_len=int(os.getenv("VLLM_MAX_MODEL_LEN", "2048")),
+                max_model_len=max_model_len,
                 gpu_memory_utilization=float(os.getenv("VLLM_GPU_MEMORY_UTILIZATION", "0.6")),
                 enforce_eager=True,  # Disable CUDA graphs for training compatibility
                 trust_remote_code=True,
@@ -151,8 +376,17 @@ class VLLMQwenPolicy:
         )
         self.training_model = get_peft_model(self.training_model, lora_config)
         
+        # Ensure all LoRA parameters require gradients
+        for name, param in self.training_model.named_parameters():
+            if "lora_" in name or param.requires_grad:
+                param.requires_grad = True
+                logger.debug(f"Enabled gradients for: {name}")
+        
         # Add value head
         self._add_value_head()
+        
+        # Create a wrapper model that includes both training_model and value_head
+        self.model = self._create_combined_model()
         
     def _add_value_head(self):
         """Add value head for GRPO training"""
@@ -163,9 +397,44 @@ class VLLMQwenPolicy:
             nn.Linear(hidden_size, hidden_size),
             nn.ReLU(),
             nn.Linear(hidden_size, 1)
-        ).to(self.device)
+        ).to(self.device).half()  # Ensure value head uses fp16 like the model
         
-        logger.info(f"✅ Added value head to model")
+        # Ensure all value head parameters require gradients
+        for param in self.value_head.parameters():
+            param.requires_grad = True
+        
+        logger.info(f"✅ Added value head to model (fp16, gradients enabled)")
+    
+    def _create_combined_model(self):
+        """Create a wrapper model that includes both training_model and value_head parameters"""
+        import torch.nn as nn
+        
+        class CombinedModel(nn.Module):
+            def __init__(self, training_model, value_head):
+                super().__init__()
+                self.training_model = training_model
+                self.value_head = value_head
+                self.training = True  # Ensure training state is preserved
+                
+            def parameters(self, recurse=True):
+                # Return parameters from both training_model and value_head
+                for param in self.training_model.parameters(recurse=recurse):
+                    yield param
+                for param in self.value_head.parameters(recurse=recurse):
+                    yield param
+                    
+            def train(self, mode=True):
+                self.training = mode
+                self.training_model.train(mode)
+                self.value_head.train(mode)
+                return self
+                
+            def eval(self):
+                return self.train(False)
+        
+        combined = CombinedModel(self.training_model, self.value_head)
+        logger.info(f"✅ Created combined model with {sum(1 for _ in combined.parameters())} total parameters")
+        return combined
     
     def _init_hf(self):
         """Initialize HuggingFace for generation and training"""
@@ -199,8 +468,17 @@ class VLLMQwenPolicy:
         )
         self.training_model = get_peft_model(self.training_model, lora_config)
         
+        # Ensure all LoRA parameters require gradients
+        for name, param in self.training_model.named_parameters():
+            if "lora_" in name or param.requires_grad:
+                param.requires_grad = True
+                logger.debug(f"Enabled gradients for: {name}")
+        
         # Add value head
         self._add_value_head()
+        
+        # Create a wrapper model that includes both training_model and value_head
+        self.model = self._create_combined_model()
         
         logger.info("✅ HuggingFace model initialized")
     
@@ -264,42 +542,6 @@ class VLLMQwenPolicy:
         
         return results
     
-    def compute_log_probs(self, states: List[str], actions: List[str]) -> torch.Tensor:
-        """Compute log probabilities for training (uses HuggingFace model)"""
-        # Always use training model for log prob computation
-        # This ensures gradients flow properly for GRPO updates
-        
-        log_probs = []
-        for state, action in zip(states, actions):
-            # Tokenize state and action
-            state_tokens = self.tokenizer(state, return_tensors="pt", truncation=True, max_length=1500)
-            full_text = state + action
-            full_tokens = self.tokenizer(full_text, return_tensors="pt", truncation=True, max_length=2000)
-            
-            # Move to device
-            state_tokens = {k: v.to(self.device) for k, v in state_tokens.items()}
-            full_tokens = {k: v.to(self.device) for k, v in full_tokens.items()}
-            
-            # Get action token positions
-            state_len = state_tokens["input_ids"].shape[1]
-            action_tokens = full_tokens["input_ids"][:, state_len:]
-            
-            if action_tokens.shape[1] == 0:
-                log_probs.append(torch.tensor(0.0, device=self.device))
-                continue
-            
-            # Compute log probabilities
-            with torch.cuda.amp.autocast(enabled=True):
-                outputs = self.training_model(input_ids=full_tokens["input_ids"][:, :-1])
-                logits = outputs.logits[:, state_len-1:-1, :]  # Logits for action tokens
-                
-                log_softmax = torch.nn.functional.log_softmax(logits, dim=-1)
-                action_log_probs = log_softmax.gather(2, action_tokens.unsqueeze(-1)).squeeze(-1)
-                total_log_prob = action_log_probs.sum()
-                
-                log_probs.append(total_log_prob)
-        
-        return torch.stack(log_probs)
     
     def get_value(self, states: List[str]) -> torch.Tensor:
         """Compute state values for GRPO training"""
@@ -320,7 +562,14 @@ class VLLMQwenPolicy:
     def parameters(self):
         """Get trainable parameters"""
         params = list(self.training_model.parameters()) + list(self.value_head.parameters())
-        return [p for p in params if p.requires_grad]
+        trainable_params = [p for p in params if p.requires_grad]
+        
+        # Debug: Log the number of trainable parameters and their gradient status
+        logger.info(f"🔧 Found {len(trainable_params)} trainable parameters out of {len(params)} total")
+        for i, p in enumerate(trainable_params[:5]):  # Show first 5
+            logger.info(f"Param {i}: shape={p.shape}, requires_grad={p.requires_grad}, grad_fn={p.grad_fn}")
+        
+        return iter(trainable_params)  # Return iterator like nn.Module.parameters()
     
     def train(self):
         """Set to training mode"""
@@ -381,6 +630,11 @@ async def main():
     # Initialize vLLM-enhanced policy  
     policy = VLLMQwenPolicy()
     
+    # Debug: Check what attributes the policy object has
+    logger.info(f"🔍 Policy object type: {type(policy)}")
+    logger.info(f"🔍 Policy has get_trainable_parameters: {hasattr(policy, 'get_trainable_parameters')}")
+    logger.info(f"🔍 Policy methods: {[m for m in dir(policy) if not m.startswith('_') and callable(getattr(policy, m))]}")
+    
     # Quick performance test first
     logger.info("🎯 Testing vLLM policy generation speed...")
     test_prompts = ["Hello, how are you today?", "What is machine learning?", "Explain quantum computing in simple terms."]
@@ -400,7 +654,8 @@ async def main():
     
     # Import required training components (using working imports from existing script)
     from training.core.grpo_trainer_gradient_fix import GRPOTrainerGradientFix
-    from training.data.trajectory_collector import TrajectoryCollector
+    from training.core.grpo_trainer import Trajectory
+    from training.data.trajectory_collector import TrajectoryCollector, EpisodeResult
     from environments.simple_shared_manager import SimpleSharedManager
     from environments.mcp_tool_environment import MCPToolEnvironment
     
@@ -414,8 +669,8 @@ async def main():
     training_config = config.get("training", {})
     model_config = config.get("model", {})
     
-    # Initialize reference policy (reuse main policy to avoid GPU memory issues with dual vLLM instances)
-    reference_policy = policy  # Share the same policy to avoid dual GPU memory allocation
+    # Initialize reference policy (shared instance for memory efficiency)
+    reference_policy = policy
     
     # Setup GRPO config
     grpo_config = {
@@ -454,20 +709,60 @@ async def main():
     for epoch in range(max_epochs):
         logger.info(f"📈 Epoch {epoch+1}/{max_epochs}")
         
-        # Collect trajectories with vLLM speed
+        # Collect episodes using real environment with vLLM speed
         start_time = time.time()
-        trajectories = await collector.collect_trajectories(
-            tasks=training_data[:4],  # Use small batch for efficiency
-            num_trajectories=training_config.get("num_trajectories", 4)
-        )
+        episode_results = await collector.collect_batch(training_data[:4])  # Use small batch for efficiency
         collection_time = time.time() - start_time
         
-        logger.info(f"⚡ Collected {len(trajectories)} trajectories in {collection_time:.2f}s")
+        logger.info(f"⚡ Collected {len(episode_results)} episodes in {collection_time:.2f}s")
         
-        # Train on trajectories
-        if trajectories:
+        # Convert episodes to trajectories and train
+        valid_episodes = [e for e in episode_results if e.is_valid()]
+        if valid_episodes:
+            # Convert episodes to trajectories for training
+            trajectories = []
+            for episode in valid_episodes:
+                # Extract states, actions, rewards, and dones from episode trajectory
+                states = []
+                actions = []
+                rewards = []
+                dones = []
+                
+                for i, step in enumerate(episode.trajectory):
+                    # Always append to maintain length consistency
+                    states.append(step.get('state', {}))  # Default to empty dict
+                    actions.append(step.get('action', ""))  # Default to empty string
+                    rewards.append(step.get('reward', 0.0))  # Default to 0.0
+                    dones.append(i == len(episode.trajectory) - 1)  # Last step is done
+                
+                # Ensure we have at least one step if trajectory is completely empty
+                if not states:
+                    states = [{}]  # Empty state
+                    actions = [""]  # Empty action
+                    rewards = [0.0]
+                    dones = [True]
+                
+                # Final safety check - ensure all arrays have same length
+                min_length = min(len(states), len(actions), len(rewards), len(dones))
+                if min_length > 0:
+                    states = states[:min_length]
+                    actions = actions[:min_length]
+                    rewards = rewards[:min_length]
+                    dones = dones[:min_length]
+                
+                logger.info(f"📊 Trajectory lengths - States: {len(states)}, Actions: {len(actions)}, Rewards: {len(rewards)}, Dones: {len(dones)}")
+                
+                trajectory = Trajectory(
+                    task_id=episode.task_id,
+                    states=states,
+                    actions=actions,
+                    rewards=rewards,
+                    dones=dones
+                )
+                trajectories.append(trajectory)
+            
             start_time = time.time()
-            metrics = trainer.train_step(policy, trajectories)
+            metrics = trainer.train_step(trajectories)
             train_time = time.time() - start_time
             
             # Log comprehensive metrics

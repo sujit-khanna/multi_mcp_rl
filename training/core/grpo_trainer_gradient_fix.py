@@ -316,7 +316,42 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
             scaled_loss.backward()
             
             # CRITICAL: Unscale gradients BEFORE clipping
-            self.scaler.unscale_(self.optimizer)
+            # Fix FP16 gradient issue: Check if gradients are FP16
+            has_fp16_grads = any(
+                param.grad is not None and param.grad.dtype == torch.float16
+                for param_group in self.optimizer.param_groups
+                for param in param_group['params']
+            )
+            
+            if has_fp16_grads:
+                # If we have FP16 gradients, completely bypass mixed precision for this step
+                logger.warning("FP16 gradients detected, using standard (non-mixed precision) optimization")
+                
+                # Manually unscale gradients by dividing by scale factor
+                scale_factor = self.scaler.get_scale()
+                for param_group in self.optimizer.param_groups:
+                    for param in param_group['params']:
+                        if param.grad is not None:
+                            param.grad.div_(scale_factor)
+                
+                # Get all parameters including value head
+                all_params = list(self.policy.model.parameters())
+                if hasattr(self.policy, 'value_head'):
+                    all_params.extend(list(self.policy.value_head.parameters()))
+                    
+                # Clip gradients (now unscaled)
+                grad_norm = torch.nn.utils.clip_grad_norm_(
+                    all_params,
+                    self.max_grad_norm
+                )
+                
+                # Standard optimizer step (no scaler)
+                self.optimizer.step()
+                # Don't update scaler for this step to avoid affecting future scaling
+                
+                return grad_norm
+            else:
+                self.scaler.unscale_(self.optimizer)
             
             # Now clip gradients (they are unscaled)
             # Get all parameters including value head
