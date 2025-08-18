@@ -102,6 +102,21 @@ class EpisodeResult:
             "initial_prompt": self.initial_prompt,
         }
     
+    @property
+    def rewards(self) -> List[float]:
+        """Extract individual step rewards from trajectory."""
+        return [turn.get("reward", 0.0) for turn in self.trajectory if "reward" in turn]
+    
+    @property  
+    def actions(self) -> List[str]:
+        """Extract actions from trajectory."""
+        return [turn.get("action", "") for turn in self.trajectory if "action" in turn]
+    
+    @property
+    def states(self) -> List[Any]:
+        """Extract states from trajectory.""" 
+        return [turn.get("state", []) for turn in self.trajectory if "state" in turn]
+
     def is_valid(self) -> bool:
         """Check if episode result is valid for training."""
         return (

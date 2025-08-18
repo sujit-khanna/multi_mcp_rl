@@ -32,41 +32,40 @@ class QwenPolicyWithPrompting(QwenPolicy):
         
         logger.info(f"🎯 Policy initialized - RL mode: {self.rl_mode}, Force rate: {self.force_rate}")
     
-    TOOL_CALLING_PROMPT = """You are a tool-calling assistant. You MUST respond with a tool call in the exact format below. Do NOT write any natural language text.
-
-CRITICAL: Your response MUST start with <tool_call> and follow this exact format:
+    TOOL_CALLING_PROMPT = """You are a tool assistant. Respond only with tool calls in this format:
 
 <tool_call>{"name": "tool_name", "arguments": {"key": "value"}}</tool_call>
 
-Available tools:
-- tavily_search: Web search (arguments: {"query": "search terms"})
-- execute_python: Run Python code (arguments: {"code": "python code"})
-- polygon_get_aggs: Get stock price data (arguments: {"ticker": "SYMBOL", "start_date": "YYYY-MM-DD", "end_date": "YYYY-MM-DD"})
-- fmp_get_quote: Get current stock price (arguments: {"symbol": "SYMBOL"})
-- fmp_search_ticker: Search for stock tickers (arguments: {"query": "company name"})
+Tools: tavily_search, execute_python, fmp_get_quote, polygon_get_aggs
 
-EXAMPLE: <tool_call>{"name": "tavily_search", "arguments": {"query": "ESG investing trends 2024"}}</tool_call>
-
-YOU MUST START YOUR RESPONSE WITH <tool_call>"""
+Example: <tool_call>{"name": "fmp_get_quote", "arguments": {"symbol": "AAPL"}}</tool_call>"""
     
     def format_conversation(self, messages: List[Dict[str, str]]) -> str:
         """
-        Format conversation with additional prompting for tool use.
+        Format conversation with optimized prompting and history truncation.
         """
-        # Inject system prompt at the beginning if not present
-        enhanced_messages = []
+        # ROLLING WINDOW: Keep only last 6-8 messages to prevent 32k->1024 token truncation
+        max_history = 8
         
-        # Check if first message is already a system message
-        if not messages or messages[0].get("role") != "system":
+        # Always keep system message + last N messages
+        if len(messages) > max_history:
+            system_msgs = [msg for msg in messages if msg.get("role") == "system"]
+            other_msgs = [msg for msg in messages if msg.get("role") != "system"]
+            # Keep system + last N-1 messages
+            truncated_msgs = system_msgs + other_msgs[-(max_history-1):]
+            logger.debug(f"🔄 Truncated conversation: {len(messages)} -> {len(truncated_msgs)} messages")
+        else:
+            truncated_msgs = messages
+        
+        # Inject optimized system prompt if not present
+        enhanced_messages = []
+        if not truncated_msgs or truncated_msgs[0].get("role") != "system":
             enhanced_messages.append({
                 "role": "system",
                 "content": self.TOOL_CALLING_PROMPT
             })
         
-        # Add all original messages
-        enhanced_messages.extend(messages)
-        
-        # Don't add partial response - let model generate from scratch
+        enhanced_messages.extend(truncated_msgs)
         
         # Use parent's format_conversation with enhanced messages
         return super().format_conversation(enhanced_messages)
@@ -121,19 +120,42 @@ YOU MUST START YOUR RESPONSE WITH <tool_call>"""
             is_tool = '<tool_call>' in action and '</tool_call>' in action
             self.action_counter += 1
 
-            # Check if we should force tool calls based on RL mode and force rate
+            # IMPROVED TOOL-USE ADHERENCE with warm-start and resampling
             should_force = False
+            should_resample = False
+            
+            # Check forcing logic based on training phase
             if self.rl_mode and self.force_rate <= 0.0:
-                # In RL mode with no forcing - never force
+                # In RL mode with no forcing - but allow resampling for very short responses
                 should_force = False
-                logger.debug("🚫 RL mode active - no forcing allowed")
+                should_resample = not is_tool and len(action.strip()) < 20  # Resample very short non-tool responses
+                logger.debug("🚫 RL mode active - no forcing, but resampling short responses")
             elif not self.rl_mode or self.action_counter <= self.assist_warmup_steps:
-                # In warmup/pretraining mode or within warmup steps
+                # WARM-START: Force tool calls during initial training phase
                 should_force = not is_tool or len(action.strip()) < 10
+                logger.debug(f"🔥 Warm-start forcing (step {self.action_counter}/{self.assist_warmup_steps})")
             else:
-                # Use force rate for probabilistic forcing
+                # Use force rate for probabilistic forcing after warm-start
                 import random
                 should_force = (not is_tool or len(action.strip()) < 10) and random.random() < self.force_rate
+
+            # Try resampling once before forcing for better tool adherence
+            if should_resample and not should_force:
+                logger.info("🔄 Resampling for better tool adherence...")
+                try:
+                    # Resample with higher penalty for natural language tokens
+                    resampled_action = self._resample_with_tool_bias(states[i] if i < len(states) else states[-1])
+                    if '<tool_call>' in resampled_action and '</tool_call>' in resampled_action:
+                        processed_actions.append(resampled_action)
+                        forced_mask.append(False)  # Not forced, successfully resampled
+                        logger.info("✅ Resampling successful - tool call generated")
+                        continue
+                    else:
+                        logger.warning("⚠️ Resampling failed - falling back to forcing")
+                        should_force = True
+                except Exception as e:
+                    logger.warning(f"⚠️ Resampling error: {e} - falling back to forcing")
+                    should_force = True
 
             if should_force:
                 context = str(states[i] if i < len(states) else states[-1]).lower()
@@ -240,6 +262,42 @@ YOU MUST START YOUR RESPONSE WITH <tool_call>"""
                 all_log_probs.append(torch.tensor(-1.0, device=self.device))
         
         return actions, all_log_probs
+    
+    def _resample_with_tool_bias(self, state) -> str:
+        """
+        Resample with bias toward tool calls for better adherence.
+        Uses higher temperature and tool-call prompting.
+        """
+        try:
+            formatted_input = self.format_conversation(state)
+            # Add explicit tool-calling instruction
+            biased_input = formatted_input + "\n\nIMPORTANT: You must respond with a tool call in <tool_call>...</tool_call> format."
+            
+            inputs = self.tokenizer(biased_input, return_tensors="pt", padding=True, truncation=True, max_length=1000)
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}
+            
+            # Generate with tool bias
+            with torch.no_grad():
+                generated_ids = self.model.generate(
+                    **inputs,
+                    max_new_tokens=256,
+                    temperature=0.8,  # Higher temperature for diversity
+                    do_sample=True,
+                    top_p=0.9,
+                    repetition_penalty=1.1,
+                    pad_token_id=self.tokenizer.pad_token_id,
+                    eos_token_id=self.tokenizer.eos_token_id
+                )
+            
+            # Extract generated text
+            input_length = inputs['input_ids'].shape[1]
+            generated_part = generated_ids[0][input_length:]
+            generated_text = self.tokenizer.decode(generated_part, skip_special_tokens=True).strip()
+            
+            return generated_text
+        except Exception as e:
+            logger.error(f"Resampling error: {e}")
+            raise e
     
     def _generate_forced_tool_call(self, context: str) -> str:
         """Generate an appropriate tool call based on context and expected tools"""

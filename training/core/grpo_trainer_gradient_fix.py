@@ -210,8 +210,23 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
         
         kl_penalty = kl_coef * kl_divergence
         
-        # Total loss
-        total_loss = policy_loss + kl_penalty
+        # SAFE LOSS ASSEMBLY: Check validity before combining terms
+        loss_terms = []
+        loss_names = []
+        
+        # Validate policy loss
+        if policy_loss is not None and torch.isfinite(policy_loss):
+            loss_terms.append(policy_loss)
+            loss_names.append("policy")
+        else:
+            logger.warning(f"⚠️ Invalid policy_loss: {policy_loss}")
+        
+        # Validate KL penalty
+        if kl_penalty is not None and torch.isfinite(kl_penalty):
+            loss_terms.append(kl_penalty)
+            loss_names.append("kl_penalty")
+        else:
+            logger.warning(f"⚠️ Invalid kl_penalty: {kl_penalty}")
         
         # Add value loss if we have value function
         value_loss = 0.0
@@ -225,7 +240,32 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
             if all_returns:
                 returns = torch.tensor(all_returns, device=self.device, dtype=torch.float32)
                 value_loss = self._compute_value_loss(all_states, returns)
-                total_loss += self.value_coef * value_loss
+                if torch.isfinite(value_loss):
+                    loss_terms.append(self.value_coef * value_loss)
+                    loss_names.append("value")
+                else:
+                    logger.warning(f"⚠️ Invalid value_loss: {value_loss}")
+        
+        # Check if we have any valid loss terms
+        if not loss_terms:
+            logger.warning("⚠️ Skipping update: no valid loss terms found")
+            try:
+                import wandb
+                wandb.log({"trainer/updates_skipped": 1}, commit=False)
+            except:
+                pass
+            return {
+                "policy_loss": 0.0,
+                "value_loss": 0.0,
+                "kl_divergence": 0.0,
+                "total_loss": 0.0,
+                "grad_norm": 0.0,
+                "updates_skipped": 1
+            }
+        
+        # Sum valid loss terms
+        total_loss = sum(loss_terms)
+        logger.debug(f"✅ Assembled loss from {len(loss_terms)} terms: {loss_names}")
         
         # Entropy regularization
         entropy_loss = 0.0
@@ -298,9 +338,12 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
     
     def _optimization_step(self, loss: torch.Tensor) -> float:
         """
-        Perform optimization step with proper gradient handling for mixed precision.
+        Perform optimization step with CPU-safe BnB handling and gradient validation.
         
-        This is the key fix: unscale gradients BEFORE clipping when using AMP.
+        CRITICAL FIXES:
+        - Never access BnB-specific attributes on CPU or when grads are None
+        - Check gradient existence before optimization
+        - Use generic gradient clipping that works for all optimizer types
         
         Args:
             loss: The loss tensor to optimize
@@ -311,106 +354,52 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
         # Zero gradients
         self.optimizer.zero_grad()
         
-        if self.use_mixed_precision:
-            # Scale loss and backward
-            scaled_loss = self.scaler.scale(loss)
-            scaled_loss.backward()
-            
-            # CRITICAL: Unscale gradients BEFORE clipping
-            # Fix FP16 gradient issue: Check if gradients are FP16
-            has_fp16_grads = any(
-                param.grad is not None and param.grad.dtype == torch.float16
-                for param_group in self.optimizer.param_groups
-                for param in param_group['params']
-            )
-            
-            if has_fp16_grads:
-                # If we have FP16 gradients, completely bypass mixed precision for this step
-                logger.warning("FP16 gradients detected, using standard (non-mixed precision) optimization")
-                
-                # Manually unscale gradients by dividing by scale factor
-                scale_factor = self.scaler.get_scale()
-                for param_group in self.optimizer.param_groups:
-                    for param in param_group['params']:
-                        if param.grad is not None:
-                            param.grad.div_(scale_factor)
-                
-                # Get all parameters including value head
-                all_params = list(self.policy.model.parameters())
-                if hasattr(self.policy, 'value_head'):
-                    all_params.extend(list(self.policy.value_head.parameters()))
-                    
-                # Clip gradients (now unscaled)
-                grad_norm = torch.nn.utils.clip_grad_norm_(
-                    all_params,
-                    self.max_grad_norm
-                )
-                
-                # Standard optimizer step (no scaler)
-                self.optimizer.step()
-                # Don't update scaler for this step to avoid affecting future scaling
-                
-                return grad_norm
-            else:
+        # Determine safe execution mode
+        use_cuda = torch.cuda.is_available() and self.device.type == "cuda"
+        use_amp = use_cuda and self.use_mixed_precision
+        
+        # Backward pass
+        if use_amp:
+            self.scaler.scale(loss).backward()
+        else:
+            loss.backward()
+        
+        # CRITICAL: Get trainable parameters and check for gradient existence
+        trainable_params = [p for p in self.policy.get_trainable_parameters() if p.requires_grad]
+        
+        # Early exit if no gradients (prevents BnB/optimizer crashes)
+        has_grads = any(p.grad is not None for p in trainable_params)
+        if not has_grads:
+            logger.info("⏭️ Skipping optimizer.step(): no gradients this update")
+            self.optimizer.zero_grad(set_to_none=True)
+            return 0.0
+        
+        # Generic gradient clipping (safe for all optimizer types)
+        if hasattr(self, 'max_grad_norm') and self.max_grad_norm > 0:
+            if use_amp:
+                # Unscale before clipping for mixed precision
                 self.scaler.unscale_(self.optimizer)
             
-            # Now clip gradients (they are unscaled)
-            # Get all parameters including value head
-            all_params = list(self.policy.model.parameters())
-            if hasattr(self.policy, 'value_head'):
-                all_params.extend(list(self.policy.value_head.parameters()))
-                
-            grad_norm = torch.nn.utils.clip_grad_norm_(
-                all_params,
-                self.max_grad_norm
-            )
-            
-            # Optimizer step with scaler
+            grad_norm = torch.nn.utils.clip_grad_norm_(trainable_params, self.max_grad_norm)
+        else:
+            # Compute gradient norm for logging without clipping
+            with torch.no_grad():
+                grad_norm = torch.sqrt(sum(
+                    (p.grad.detach().float().norm() ** 2)
+                    for p in trainable_params if p.grad is not None
+                )).item()
+        
+        # Optimizer step
+        if use_amp:
             self.scaler.step(self.optimizer)
             self.scaler.update()
-            
         else:
-            # Standard gradient flow
-            loss.backward()
-            
-            # Clip gradients
-            # Get all parameters including value head
-            all_params = list(self.policy.model.parameters())
-            if hasattr(self.policy, 'value_head'):
-                all_params.extend(list(self.policy.value_head.parameters()))
-            
-            grad_norm = torch.nn.utils.clip_grad_norm_(
-                all_params,
-                self.max_grad_norm
-            )
-            
-            # Check if gradients are valid before stepping
-            if torch.isnan(grad_norm) or torch.isinf(grad_norm):
-                logger.error(f"NaN/Inf gradient norm detected: {grad_norm}. Skipping optimizer step.")
-                # Clear gradients and return
-                self.optimizer.zero_grad()
-                return float('nan')
-            
-            # Standard optimizer step
             self.optimizer.step()
-            
-            # Debug: Check if parameters actually updated
-            if self.step_count % 10 == 0:
-                # Sample a parameter to check if it's changing
-                sample_param = next(iter(self.policy.model.parameters()))
-                logger.debug(f"Sample param mean: {sample_param.data.mean().item():.6f}")
-                if hasattr(self.policy, 'value_head'):
-                    value_param = next(iter(self.policy.value_head.parameters()))
-                    logger.debug(f"Value param mean: {value_param.data.mean().item():.6f}")
         
-        # Track gradient norm
-        self.grad_norm_history.append(grad_norm.item() if hasattr(grad_norm, 'item') else grad_norm)
+        self.optimizer.zero_grad(set_to_none=True)
         
-        # Log if gradient norm is high
-        if grad_norm > self.max_grad_norm * 2:
-            logger.warning(f"High gradient norm detected: {grad_norm:.4f}")
-        
-        return grad_norm.item() if hasattr(grad_norm, 'item') else grad_norm
+        # Return gradient norm for logging
+        return grad_norm if isinstance(grad_norm, float) else grad_norm.item()
     
     def sync_reference_policy(self):
         """

@@ -258,7 +258,12 @@ class GRPOTrainer:
             else:
                 logger.info(f"Successfully found {len(trainable_params)} trainable parameters after re-enabling")
         
-        # Always use standard AdamW optimizer (BitsAndBytes disabled for MPS compatibility)
+        # CRITICAL: Force standard AdamW on CPU or when BnB is disabled
+        # This prevents 'cadam32bit_grad_fp32' attribute errors
+        use_cpu = self.device.type == "cpu" or not torch.cuda.is_available()
+        if use_cpu:
+            logger.info("🖥️ Using CPU-safe AdamW optimizer (no BitsAndBytes)")
+        
         self.optimizer = AdamW(
             trainable_params,
             lr=lr,
@@ -266,6 +271,10 @@ class GRPOTrainer:
             eps=adam_epsilon,
             weight_decay=weight_decay,
         )
+        
+        # Store flag for optimization step safety
+        self.using_bnb = False  # Always False since BnB is disabled
+        
         logger.info(f"Using AdamW optimizer with lr={lr} for {len(trainable_params)} parameters")
     
     def _setup_scheduler(self) -> None:

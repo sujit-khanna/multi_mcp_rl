@@ -811,8 +811,29 @@ async def main():
         
         logger.info(f"⚡ Collected {len(episode_results)} episodes in {collection_time:.2f}s")
         
-        # Convert episodes to trajectories and train
+        # ENHANCED WANDB ROLLOUT LOGGING: Always log rollout metrics
         valid_episodes = [e for e in episode_results if e.is_valid()]
+        total_rewards = [sum(ep.rewards) for ep in valid_episodes]
+        step_rewards = [r for ep in valid_episodes for r in ep.rewards]
+        tool_calls_count = sum(1 for ep in valid_episodes for action in ep.actions if '<tool_call>' in str(action))
+        
+        rollout_metrics = {
+            "rollouts/num_episodes": len(episode_results),
+            "rollouts/num_valid": len(valid_episodes),
+            "rollouts/collection_time": collection_time,
+            "rollouts/avg_episode_reward": sum(total_rewards) / len(total_rewards) if total_rewards else 0.0,
+            "rollouts/avg_step_reward": sum(step_rewards) / len(step_rewards) if step_rewards else 0.0,
+            "rollouts/total_tool_calls": tool_calls_count,
+            "rollouts/tool_call_rate": tool_calls_count / len(step_rewards) if step_rewards else 0.0,
+            "rollouts/success_rate": len(valid_episodes) / len(episode_results) if episode_results else 0.0,
+        }
+        
+        try:
+            wandb.log(rollout_metrics, commit=False)
+            logger.debug(f"📊 Rollout metrics logged: {tool_calls_count} tool calls, {len(valid_episodes)} valid episodes")
+        except Exception as e:
+            logger.warning(f"⚠️ Rollout metrics logging failed: {e}")
+        
         if valid_episodes:
             # Convert episodes to trajectories for training
             trajectories = []
@@ -899,7 +920,20 @@ async def main():
             logger.info(f"✅ Training step completed in {train_time:.2f}s")
             logger.info(f"📊 Metrics: {metrics}")
         else:
-            logger.warning("⚠️  No trajectories collected, skipping training step")
+            logger.warning("⚠️ No valid trajectories collected, skipping training step")
+            
+            # LOG SKIPPED TRAINING STEP
+            skip_metrics = {
+                "trainer/updates_skipped": 1,
+                "trainer/skip_reason": "no_valid_trajectories",
+                "epoch": epoch + 1
+            }
+            
+            try:
+                wandb.log(skip_metrics, commit=True)
+                logger.debug("📊 Training skip logged to WandB")
+            except Exception as e:
+                logger.warning(f"⚠️ Skip metrics logging failed: {e}")
         
         # Save checkpoint every 10 epochs
         if (epoch + 1) % 10 == 0:

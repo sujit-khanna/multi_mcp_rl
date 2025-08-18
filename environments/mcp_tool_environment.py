@@ -778,18 +778,26 @@ def make_mcp_tool_env(task_data: Dict[str, Any]) -> MCPToolEnvironment:
 # Register environment with SkyRL if available
 if SKYRL_AVAILABLE:
     try:
-        from skyrl_gym.envs.registration import register
+        from skyrl_gym.envs.registration import register, registry
         
-        register(
-            id="mcp_tool_env",
-            entry_point="environments.mcp_tool_environment:make_mcp_tool_env"
-        )
-        logger.info("✅ MCPToolEnvironment registered with SkyRL")
+        # IDEMPOTENT GUARD: Check if already registered
+        if "mcp_tool_env" not in registry:
+            register(
+                id="mcp_tool_env",
+                entry_point="environments.mcp_tool_environment:make_mcp_tool_env"
+            )
+            logger.info("✅ MCPToolEnvironment registered with SkyRL")
+        else:
+            logger.debug("🔄 MCPToolEnvironment already registered with SkyRL")
         
     except ImportError:
-        logger.warning("Could not register environment with SkyRL registry")
+        logger.debug("Could not register environment with SkyRL registry (SkyRL not available)")
         
     except Exception as e:
-        logger.warning(f"Environment registration failed: {e}")
+        # Silently handle already registered case
+        if "already registered" in str(e):
+            logger.debug(f"📝 Environment already registered: {e}")
+        else:
+            logger.warning(f"Environment registration failed: {e}")
 else:
     logger.info("SkyRL not available - environment running in standalone mode")
