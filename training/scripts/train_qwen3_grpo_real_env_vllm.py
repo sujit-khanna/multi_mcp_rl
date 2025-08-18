@@ -97,11 +97,11 @@ class VLLMQwenPolicy:
         logger.info(f"🚀 Policy initialized - vLLM: {self.use_vllm}")
     
     def get_trainable_parameters(self):
-        """Get count of trainable parameters for GRPO trainer compatibility"""
+        """Get trainable parameters for GRPO trainer compatibility"""
         trainable_params = list(self.parameters())
         count = sum(p.numel() for p in trainable_params)
-        logger.info(f"🔧 get_trainable_parameters() returning: {count}")
-        return count
+        logger.info(f"🔧 get_trainable_parameters() returning {len(trainable_params)} parameters ({count} total elements)")
+        return trainable_params
     
     def compute_values(self, input_ids, attention_mask=None):
         """Compute value estimates for GRPO training"""
@@ -125,8 +125,8 @@ class VLLMQwenPolicy:
                     # Get value for this state (PRESERVE GRADIENTS FOR TRAINING)
                     if hasattr(self, 'value_head') and self.value_head is not None:
                         hidden_states = self.training_model(**tokens, output_hidden_states=True).hidden_states[-1]
-                        # Use last token's hidden state
-                        last_hidden = hidden_states[:, -1, :]
+                        # Use last token's hidden state and convert to FP32 for value head
+                        last_hidden = hidden_states[:, -1, :].float()
                         value = self.value_head(last_hidden)
                         values.append(value.squeeze())
                     else:
@@ -140,8 +140,11 @@ class VLLMQwenPolicy:
             outputs = self.training_model(input_ids=input_ids, attention_mask=attention_mask, output_hidden_states=True)
             hidden_states = outputs.hidden_states[-1]  # Last layer hidden states
                 
+            # Convert to FP32 for value head to avoid numerical instability
+            hidden_states_fp32 = hidden_states.float()
+            
             # Compute values using the value head
-            values = self.value_head(hidden_states)
+            values = self.value_head(hidden_states_fp32)
             return values.squeeze(-1)  # Remove last dimension
         else:
             # Return zeros if no value head available (with gradients enabled)
@@ -155,6 +158,8 @@ class VLLMQwenPolicy:
         """Enable evaluation mode for trajectory collection"""
         if hasattr(self, 'model') and self.model is not None:
             self.model.eval()
+        if hasattr(self, 'training_model') and self.training_model is not None:
+            self.training_model.eval()
         if hasattr(self, 'value_head') and self.value_head is not None:
             self.value_head.eval()
     
@@ -162,6 +167,8 @@ class VLLMQwenPolicy:
         """Enable training mode"""
         if hasattr(self, 'model') and self.model is not None:
             self.model.train()
+        if hasattr(self, 'training_model') and self.training_model is not None:
+            self.training_model.train()
         if hasattr(self, 'value_head') and self.value_head is not None:
             self.value_head.train()
     
@@ -213,6 +220,12 @@ class VLLMQwenPolicy:
         """Compute log probabilities for given state-action pairs"""
         if not hasattr(self, 'training_model') or self.training_model is None:
             raise RuntimeError("No training model available for log prob computation")
+        
+        # CRITICAL: Ensure model is in training mode for gradient computation
+        if not self.training_model.training:
+            logger.warning("⚠️ Model was in eval mode during compute_log_probs, switching to train mode")
+            self.training_model.train()
+            self.value_head.train()
             
         # Ensure states and actions are lists
         if not isinstance(states, list):
@@ -267,8 +280,15 @@ class VLLMQwenPolicy:
             
             # Compute logits for the sequence (excluding last token for autoregressive prediction)
             input_ids = full_tokens["input_ids"][:, :-1]
+            
+            # CRITICAL: Ensure gradients are enabled for the forward pass
+            # This must NOT be in a torch.no_grad() context
             outputs = self.training_model(input_ids=input_ids)
             logits = outputs.logits
+            
+            # Note: With 4-bit quantization, logits won't have requires_grad=True directly
+            # because the base model is frozen. Only LoRA adapters are trainable.
+            # The gradient will flow through the LoRA adapters when we compute the loss.
             
             # Get logits for target positions
             target_len = target_tokens.shape[1]
@@ -276,45 +296,57 @@ class VLLMQwenPolicy:
                 # Extract logits corresponding to target tokens
                 target_logits = logits[:, prompt_len-1:prompt_len+target_len-1, :]
                 
-                # Compute log probabilities
-                log_probs = torch.nn.functional.log_softmax(target_logits, dim=-1)
-                
-                # Get log probabilities for actual target tokens
+                # MEMORY-EFFICIENT LOG PROB COMPUTATION: Use gather instead of log_softmax
+                # This avoids creating large [batch, seq, vocab] tensors
                 if target_logits.shape[1] == target_tokens.shape[1]:
-                    token_log_probs = log_probs.gather(2, target_tokens.unsqueeze(-1)).squeeze(-1)
+                    # Gather logits for target tokens: [batch, seq, 1] -> [batch, seq]
+                    token_logits = target_logits.gather(2, target_tokens.unsqueeze(-1)).squeeze(-1)
+                    # Compute log normalization: [batch, seq]
+                    log_normalizers = target_logits.logsumexp(dim=-1)
+                    # Log probabilities = token_logits - log_normalizers
+                    token_log_probs = token_logits - log_normalizers
                     total_log_prob = token_log_probs.sum()
                 else:
                     # Compute what we can if there's a mismatch
                     min_len = min(target_logits.shape[1], target_tokens.shape[1])
                     if min_len > 0:
                         target_subset = target_tokens[:, :min_len]
-                        logits_subset = log_probs[:, :min_len, :]
-                        token_log_probs = logits_subset.gather(2, target_subset.unsqueeze(-1)).squeeze(-1)
+                        logits_subset = target_logits[:, :min_len, :]
+                        # Memory-efficient log prob computation
+                        token_logits = logits_subset.gather(2, target_subset.unsqueeze(-1)).squeeze(-1)
+                        log_normalizers = logits_subset.logsumexp(dim=-1)
+                        token_log_probs = token_logits - log_normalizers
                         total_log_prob = token_log_probs.sum()
                     else:
                         # Last resort: compute log prob for a single space token
                         space_id = self.tokenizer(" ", return_tensors="pt")["input_ids"][0, -1].to(self.device)
                         space_logits = logits[:, -1, :]  # Last position
-                        space_log_probs = torch.nn.functional.log_softmax(space_logits, dim=-1)
-                        total_log_prob = space_log_probs[0, space_id]
+                        # Memory-efficient computation
+                        space_token_logit = space_logits[0, space_id]
+                        log_normalizer = space_logits.logsumexp(dim=-1)[0]
+                        total_log_prob = space_token_logit - log_normalizer
             else:
                 # Fallback: compute log prob for end token at last position
                 eos_id = self.tokenizer.eos_token_id or self.tokenizer.pad_token_id
                 if eos_id is not None:
                     last_logits = logits[:, -1, :]
-                    last_log_probs = torch.nn.functional.log_softmax(last_logits, dim=-1)
-                    total_log_prob = last_log_probs[0, eos_id]
+                    # Memory-efficient computation
+                    eos_token_logit = last_logits[0, eos_id]
+                    log_normalizer = last_logits.logsumexp(dim=-1)[0]
+                    total_log_prob = eos_token_logit - log_normalizer
                 else:
-                    # Very last resort: uniform distribution over vocabulary
-                    vocab_size = logits.shape[-1]
-                    # Use logits directly to maintain gradient flow
-                    uniform_logits = torch.zeros_like(logits[0, -1, :])  # Shape: [vocab_size]
-                    uniform_log_probs = torch.nn.functional.log_softmax(uniform_logits, dim=-1)
-                    total_log_prob = uniform_log_probs.mean()  # Average log prob
+                    # Very last resort: Use a small value from the logits to maintain gradient connection
+                    # We take the mean of logits to keep it connected to the computation graph
+                    total_log_prob = logits.mean() * 0.0  # Multiply by 0 but keep gradient connection
             
             batch_log_probs.append(total_log_prob)
         
-        return torch.stack(batch_log_probs)
+        # Stack log probs and ensure they maintain gradient connection
+        stacked_log_probs = torch.stack(batch_log_probs)
+        
+        # For 4-bit models, the gradient flows through LoRA adapters
+        # The stacked log probs should maintain the computation graph
+        return stacked_log_probs
     
     def _init_vllm(self):
         """Initialize vLLM for fast generation"""
@@ -388,6 +420,20 @@ class VLLMQwenPolicy:
         # Create a wrapper model that includes both training_model and value_head
         self.model = self._create_combined_model()
         
+        # CRITICAL: Ensure training model is in training mode and parameters require gradients
+        self.training_model.train()
+        self.value_head.train()
+        
+        # Double-check LoRA parameters still require gradients after all initialization
+        lora_count = 0
+        for name, param in self.training_model.named_parameters():
+            if "lora_" in name:
+                if not param.requires_grad:
+                    logger.warning(f"⚠️ Forcing LoRA parameter {name} to require gradients")
+                    param.requires_grad = True
+                lora_count += 1
+        logger.info(f"✅ Verified {lora_count} LoRA parameters require gradients")
+        
     def _add_value_head(self):
         """Add value head for GRPO training"""
         import torch.nn as nn
@@ -397,13 +443,13 @@ class VLLMQwenPolicy:
             nn.Linear(hidden_size, hidden_size),
             nn.ReLU(),
             nn.Linear(hidden_size, 1)
-        ).to(self.device).half()  # Ensure value head uses fp16 like the model
+        ).to(self.device).float()  # Use FP32 for value head to avoid numerical instability
         
         # Ensure all value head parameters require gradients
         for param in self.value_head.parameters():
             param.requires_grad = True
         
-        logger.info(f"✅ Added value head to model (fp16, gradients enabled)")
+        logger.info(f"✅ Added value head to model (fp32 for numerical stability, gradients enabled)")
     
     def _create_combined_model(self):
         """Create a wrapper model that includes both training_model and value_head parameters"""
@@ -412,8 +458,10 @@ class VLLMQwenPolicy:
         class CombinedModel(nn.Module):
             def __init__(self, training_model, value_head):
                 super().__init__()
-                self.training_model = training_model
-                self.value_head = value_head
+                # CRITICAL FIX: Register submodules properly using add_module
+                # This ensures PyTorch's parameter tracking works correctly
+                self.add_module("training_model", training_model)
+                self.add_module("value_head", value_head)
                 self.training = True  # Ensure training state is preserved
                 
             def parameters(self, recurse=True):
@@ -479,6 +527,20 @@ class VLLMQwenPolicy:
         
         # Create a wrapper model that includes both training_model and value_head
         self.model = self._create_combined_model()
+        
+        # CRITICAL: Ensure training model is in training mode and parameters require gradients
+        self.training_model.train()
+        self.value_head.train()
+        
+        # Double-check LoRA parameters still require gradients after all initialization
+        lora_count = 0
+        for name, param in self.training_model.named_parameters():
+            if "lora_" in name:
+                if not param.requires_grad:
+                    logger.warning(f"⚠️ Forcing LoRA parameter {name} to require gradients")
+                    param.requires_grad = True
+                lora_count += 1
+        logger.info(f"✅ Verified {lora_count} LoRA parameters require gradients")
         
         logger.info("✅ HuggingFace model initialized")
     
@@ -560,14 +622,47 @@ class VLLMQwenPolicy:
         return torch.stack(values)
     
     def parameters(self):
-        """Get trainable parameters"""
-        params = list(self.training_model.parameters()) + list(self.value_head.parameters())
-        trainable_params = [p for p in params if p.requires_grad]
+        """Get trainable parameters - specifically LoRA adapters + value head"""
+        trainable_params = []
+        
+        # CRITICAL FIX: For PEFT models, we need to check if this is a PeftModel
+        # and use the appropriate method to get trainable parameters
+        try:
+            from peft import PeftModel
+            if isinstance(self.training_model, PeftModel):
+                # For PEFT models, get only the trainable parameters
+                for name, param in self.training_model.named_parameters():
+                    if param.requires_grad and "lora" in name.lower():
+                        trainable_params.append(param)
+                        
+                # Don't double-check base_model - PEFT already includes all trainable params
+            else:
+                # Regular model - get all parameters that require gradients
+                for name, param in self.training_model.named_parameters():
+                    if param.requires_grad:
+                        trainable_params.append(param)
+        except ImportError:
+            # PEFT not available, use regular method
+            for name, param in self.training_model.named_parameters():
+                if param.requires_grad:
+                    trainable_params.append(param)
+        
+        # Add value head parameters (these should always be trainable)
+        for param in self.value_head.parameters():
+            if not param.requires_grad:
+                # Force value head parameters to require gradients
+                param.requires_grad = True
+            trainable_params.append(param)
         
         # Debug: Log the number of trainable parameters and their gradient status
-        logger.info(f"🔧 Found {len(trainable_params)} trainable parameters out of {len(params)} total")
-        for i, p in enumerate(trainable_params[:5]):  # Show first 5
-            logger.info(f"Param {i}: shape={p.shape}, requires_grad={p.requires_grad}, grad_fn={p.grad_fn}")
+        logger.info(f"🔧 Found {len(trainable_params)} trainable parameters")
+        if len(trainable_params) == 0:
+            logger.error("⚠️ NO TRAINABLE PARAMETERS FOUND!")
+            logger.error("Checking training_model state:")
+            logger.error(f"  training_model.training: {self.training_model.training}")
+            # List all parameters to debug
+            for name, param in list(self.training_model.named_parameters())[:10]:
+                logger.error(f"  {name}: requires_grad={param.requires_grad}, shape={param.shape}")
         
         return iter(trainable_params)  # Return iterator like nn.Module.parameters()
     
@@ -761,24 +856,45 @@ async def main():
                 )
                 trajectories.append(trajectory)
             
+            # ROBUST WANDB LOGGING: Pre-update heartbeat to ensure visibility
+            heartbeat_metrics = {
+                "epoch": epoch,
+                "heartbeat": 1,
+                "collection_time": collection_time,
+                "total_trajectories": len(trajectories),
+                "vllm_enabled": policy.use_vllm,
+                "status": "starting_training_step"
+            }
+            
+            try:
+                wandb.log(heartbeat_metrics)
+                logger.debug("📡 Pre-training heartbeat logged to WandB")
+            except Exception as e:
+                logger.warning(f"⚠️  WandB heartbeat failed: {e}")
+            
             start_time = time.time()
             metrics = trainer.train_step(trajectories)
             train_time = time.time() - start_time
             
-            # Log comprehensive metrics
+            # Log comprehensive training metrics
             combined_metrics = {
                 "epoch": epoch,
                 "collection_time": collection_time,
                 "train_time": train_time,
                 "total_trajectories": len(trajectories),
                 "vllm_enabled": policy.use_vllm,
+                "status": "training_completed",
                 **metrics
             }
             
+            # Robust WandB logging with detailed error handling
             try:
                 wandb.log(combined_metrics)
-            except:
-                pass
+                logger.debug("📊 Training metrics logged to WandB successfully")
+            except Exception as e:
+                logger.error(f"🚨 WandB metrics logging failed: {e}")
+                logger.info(f"📋 Metrics that failed to log: {combined_metrics}")
+                # Continue training even if logging fails
                 
             logger.info(f"✅ Training step completed in {train_time:.2f}s")
             logger.info(f"📊 Metrics: {metrics}")

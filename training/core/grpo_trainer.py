@@ -190,7 +190,7 @@ class GRPOTrainer:
         self.adaptive_kl = grpo_config.get("adaptive_kl_penalty", True)
         self.kl_warmup_steps = grpo_config.get("kl_penalty_warmup_steps", 500)
         
-        logger.info(f"GRPOTrainer initialized with {self.policy.get_trainable_parameters():,} trainable parameters")
+        logger.info(f"GRPOTrainer initialized with {len(self.policy.get_trainable_parameters()):,} trainable parameters")
         logger.info(f"GRPO config: gamma={self.gamma}, lambda={self.gae_lambda}, "
                    f"clip={self.clip_ratio}, kl_coef={self.kl_penalty_coef}")
     
@@ -226,45 +226,37 @@ class GRPOTrainer:
         adam_beta2 = _as_float(self.training_config.get("adam_beta2", 0.95), 0.95)
         adam_epsilon = _as_float(self.training_config.get("adam_epsilon", 1e-5), 1e-5)
         
-        # Debug: Check all parameters and their gradient status
-        # Include both model and value head parameters if available
-        all_params = list(self.policy.model.named_parameters())
-        trainable_params = [p for p in self.policy.model.parameters() if p.requires_grad]
+        # FIXED: Use policy's get_trainable_parameters method for correct parameter detection
+        # This ensures we get the parameters from the properly registered CombinedModel
+        trainable_params = list(self.policy.get_trainable_parameters())
         
-        # Add value head parameters if this is a policy with value head
-        if hasattr(self.policy, 'value_head'):
-            value_params = list(self.policy.value_head.named_parameters())
-            all_params.extend([('value_head.' + name, p) for name, p in value_params])
-            trainable_params.extend([p for p in self.policy.value_head.parameters() if p.requires_grad])
-        
-        trainable_names = [name for name, p in all_params if p.requires_grad]
-        
-        logger.info(f"Model has {len(all_params)} total parameters")
-        logger.info(f"Found {len(trainable_params)} trainable parameters")
+        logger.info(f"Found {len(trainable_params)} trainable parameters using policy.get_trainable_parameters()")
         
         if not trainable_params:
-            logger.error("No trainable parameters found!")
-            logger.error("Parameter gradient status:")
-            for name, param in all_params[:20]:  # Show first 20 for debugging
-                logger.error(f"  {name}: requires_grad={param.requires_grad}")
+            logger.error("No trainable parameters found via policy.get_trainable_parameters()!")
+            
+            # Debug: Check what the policy model actually contains
+            if hasattr(self.policy, 'model'):
+                model_params = list(self.policy.model.parameters())
+                logger.error(f"Direct model parameters: {len(model_params)}")
+                if model_params:
+                    logger.error(f"First param requires_grad: {model_params[0].requires_grad}")
             
             # Try to re-enable training mode
             logger.warning("Attempting to re-enable training mode...")
-            self.policy.enable_training_mode()
+            if hasattr(self.policy, 'enable_training_mode'):
+                self.policy.enable_training_mode()
+            elif hasattr(self.policy, 'train'):
+                self.policy.train()
             
             # Check again  
-            trainable_params = [p for p in self.policy.model.parameters() if p.requires_grad]
-            if hasattr(self.policy, 'value_head'):
-                trainable_params.extend([p for p in self.policy.value_head.parameters() if p.requires_grad])
-            trainable_names = [name for name, p in all_params if p.requires_grad]
+            trainable_params = list(self.policy.get_trainable_parameters())
             
             if not trainable_params:
                 logger.error("Still no trainable parameters after re-enabling training mode!")
-                logger.error("This suggests gradients are being disabled somewhere else")
                 raise ValueError("No trainable parameters found even after re-enabling training mode!")
             else:
                 logger.info(f"Successfully found {len(trainable_params)} trainable parameters after re-enabling")
-                logger.info(f"Trainable parameter examples: {trainable_names[:5]}")
         
         # Always use standard AdamW optimizer (BitsAndBytes disabled for MPS compatibility)
         self.optimizer = AdamW(
@@ -400,7 +392,8 @@ class GRPOTrainer:
 
             # Debug: Check model training state before policy update
             is_training = self.policy.model.training
-            trainable_count = sum(1 for p in self.policy.model.parameters() if p.requires_grad)
+            # Use policy's get_trainable_parameters method for accurate count
+            trainable_count = len(list(self.policy.get_trainable_parameters()))
             logger.info(f"Model training state: {is_training}, trainable params: {trainable_count}")
             if not is_training:
                 logger.warning("Model not in training mode during policy update")
@@ -865,7 +858,7 @@ class GRPOTrainer:
     def __repr__(self) -> str:
         """String representation of the trainer."""
         return (f"GRPOTrainer(step={self.step_count}, "
-                f"trainable_params={self.policy.get_trainable_parameters():,}, "
+                f"trainable_params={len(self.policy.get_trainable_parameters()):,}, "
                 f"device={self.device})")
 
 

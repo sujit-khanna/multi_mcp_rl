@@ -102,24 +102,12 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
                 import os
                 strict_keys = os.getenv("STRICT_TRAJ_KEYS", "1") == "1"
                 
-                # Check for log_probs (the expected key)
-                if not hasattr(traj, 'log_probs') or traj.log_probs is None:
-                    if strict_keys:
-                        raise KeyError(
-                            f"Missing 'log_probs' on trajectory {traj_idx}. "
-                            f"Expected 'log_probs', not 'old_log_probs'. "
-                            f"Fix trajectory collection to store with correct key."
-                        )
-                    # Fallback: try old_log_probs
-                    if hasattr(traj, 'old_log_probs') and traj.old_log_probs is not None:
-                        logger.warning(f"Using deprecated 'old_log_probs' key for trajectory {traj_idx}")
-                        traj.log_probs = traj.old_log_probs
-                    else:
-                        # Compute on the fly as last resort
-                        logger.warning(f"Computing log_probs on-the-fly for trajectory {traj_idx} (suboptimal for PPO)")
-                        with torch.no_grad():
-                            computed = self.policy.compute_log_probs(traj.states, traj.actions)
-                        traj.log_probs = [p for p in computed]
+                # CRITICAL FIX: Always recompute log_probs during training to preserve gradients
+                # Using stored log_probs from trajectory collection causes gradient issues
+                # because they were computed with torch.no_grad()
+                logger.debug(f"Recomputing log_probs for trajectory {traj_idx} to preserve gradients")
+                computed = self.policy.compute_log_probs(traj.states, traj.actions)
+                traj.log_probs = [p for p in computed]
                 
                 # Validate alignment
                 if len(traj.log_probs) != len(traj.actions):
@@ -168,19 +156,28 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
 
         unforced_mask = ~forced_mask
 
+        # ROBUST PPO RATIO COMPUTATION with empty tensor handling
         # Compute policy ratios with numerical stability on unforced steps
         log_ratios_full = current_log_probs - old_log_probs
         log_ratios_full = torch.clamp(log_ratios_full, min=-20.0, max=2.0)
         ratios_full = torch.exp(log_ratios_full).clamp(1e-8, 1e8)
 
-        log_ratios = log_ratios_full[unforced_mask]
-        ratios = ratios_full[unforced_mask]
-        adv_unforced = advantages[unforced_mask]
-
-        # SANITY CHECK: Log ratio statistics
-        ratio_mean = ratios.mean().item() if ratios.numel() > 0 else 1.0
-        ratio_std = ratios.std().item() if ratios.numel() > 0 else 0.0
-        logger.info(f"PPO Ratio Check - mean: {ratio_mean:.3f}, std: {ratio_std:.3f}")
+        # Extract unforced data with safety checks
+        if unforced_mask.any():
+            log_ratios = log_ratios_full[unforced_mask]
+            ratios = ratios_full[unforced_mask]
+            adv_unforced = advantages[unforced_mask]
+            
+            # SANITY CHECK: Log ratio statistics
+            ratio_mean = ratios.mean().item() if ratios.numel() > 0 else 1.0
+            ratio_std = ratios.std().item() if ratios.numel() > 0 else 0.0
+            logger.info(f"PPO Ratio Check - mean: {ratio_mean:.3f}, std: {ratio_std:.3f}, count: {ratios.numel()}")
+        else:
+            # No unforced steps - create empty tensors for metrics
+            log_ratios = torch.tensor([], device=self.device, dtype=torch.float32)
+            ratios = torch.tensor([], device=self.device, dtype=torch.float32)
+            adv_unforced = torch.tensor([], device=self.device, dtype=torch.float32)
+            logger.warning("All steps are forced - no unforced data for PPO ratios")
 
         # Compute clipped policy loss (PPO-style) on unforced steps; if none, fall back to REINFORCE on all
         if adv_unforced.numel() > 0:
@@ -189,9 +186,12 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
                 ratios, 1 - self.clip_ratio, 1 + self.clip_ratio
             )
             policy_loss = torch.mean(torch.max(policy_loss_unclipped, policy_loss_clipped))
+            logger.debug(f"PPO policy loss computed on {adv_unforced.numel()} unforced steps")
         else:
             logger.warning("No unforced steps available. Falling back to REINFORCE over all steps.")
             policy_loss = -(advantages * current_log_probs).mean()
+            # For metrics, use full ratios for forced steps
+            ratios = ratios_full
         
         # Compute KL divergence penalty
         log_ratio = torch.clamp(current_log_probs - ref_log_probs, min=-10.0, max=10.0)
@@ -246,21 +246,22 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
         # Store grad_norm as instance variable for external access
         self.grad_norm = grad_norm
         
-        # Compile metrics
+        # Compile metrics with safe empty tensor handling
         metrics = {
             "policy_loss": policy_loss.item(),
             "kl_divergence": kl_divergence.item(),
             "kl_penalty": kl_penalty.item(),
             "total_loss": total_loss.item(),
-            "avg_ratio": ratios.mean().item(),
-            "max_ratio": ratios.max().item(),
-            "min_ratio": ratios.min().item(),
-            "avg_advantage": advantages.mean().item(),
-            "std_advantage": advantages.std().item(),
+            "avg_ratio": ratios.mean().item() if ratios.numel() > 0 else 1.0,
+            "max_ratio": ratios.max().item() if ratios.numel() > 0 else 1.0,
+            "min_ratio": ratios.min().item() if ratios.numel() > 0 else 1.0,
+            "avg_advantage": advantages.mean().item() if advantages.numel() > 0 else 0.0,
+            "std_advantage": advantages.std().item() if advantages.numel() > 0 else 0.0,
             "kl_coef": kl_coef,
             "grad_norm": grad_norm,
             "ppo/forced_fraction": forced_mask.float().mean().item() if forced_mask.numel() > 0 else 0.0,
             "ppo/unforced_count": int(unforced_mask.sum().item()),
+            "ppo/total_steps": len(advantages),
         }
         
         if value_loss != 0:
@@ -413,44 +414,48 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
     
     def sync_reference_policy(self):
         """
-        Robust reference policy synchronization that works with LoRA/PEFT.
+        OPTIMIZED reference policy synchronization: Only copy LoRA adapters + value head.
+        This avoids copying massive base model weights and quantization buffers.
         """
-        logger.info("Synchronizing reference policy...")
+        logger.info("Synchronizing reference policy (LoRA + value head only)...")
         
         with torch.no_grad():
-            # Get source state dict (includes LoRA weights if applicable)
+            # Get source state dict
             src_state = self.policy.state_dict()
 
-            # Try to include LoRA/PEFT adapter weights explicitly
-            try:
-                from peft import get_peft_model_state_dict
-                if hasattr(self.policy, 'model') and hasattr(self.policy.model, 'peft_config'):
-                    lora_state = get_peft_model_state_dict(self.policy.model)
-                    src_state.update({k: v for k, v in lora_state.items()})
-                    logger.info(f"Included {len(lora_state)} LoRA parameters in sync")
-            except Exception as e:
-                logger.debug(f"No LoRA state to sync: {e}")
+            # OPTIMIZED APPROACH: Only sync trainable LoRA adapters + value head
+            trainable_keys = []
+            
+            # Include LoRA adapter weights only
+            lora_keys = [k for k in src_state.keys() if "lora_" in k]
+            trainable_keys.extend(lora_keys)
+            
+            # Include value head weights only
+            value_head_keys = [k for k in src_state.keys() if "value_head" in k]
+            trainable_keys.extend(value_head_keys)
+            
+            # Create filtered state with only trainable components
+            filtered_state = {k: v for k, v in src_state.items() if k in trainable_keys}
+            
+            logger.info(f"Syncing {len(lora_keys)} LoRA params + {len(value_head_keys)} value head params")
+            logger.info(f"Skipping {len(src_state) - len(filtered_state)} base model parameters")
 
-            # Filter out non-trainable buffers (quantization artifacts)
-            exclude = (".quant_state", ".absmax", ".quant_map", ".zeros", ".scales")
-            filtered_state = {k: v for k, v in src_state.items() if not any(e in k for e in exclude)}
-
-            skipped = [k for k in src_state.keys() if any(e in k for e in exclude)]
-            if skipped:
-                logger.debug(f"Skipped {len(skipped)} non-trainable buffers during sync")
-
-            # Load into reference policy
+            # Load into reference policy (only the trainable parts)
             missing, unexpected = self.reference_policy.load_state_dict(filtered_state, strict=False)
 
             if missing:
-                logger.warning(f"Missing keys in reference sync: {missing}")
+                # Filter missing keys to only show LoRA/value_head that are actually expected
+                relevant_missing = [k for k in missing if "lora_" in k or "value_head" in k]
+                if relevant_missing:
+                    logger.warning(f"Missing trainable keys in reference sync: {relevant_missing}")
+            
             if unexpected:
-                logger.warning(f"Unexpected keys in reference sync: {unexpected}")
+                logger.debug(f"Unexpected keys (normal for partial sync): {len(unexpected)} keys")
 
-            # Copy value head explicitly if present
+            # Additional explicit value head sync for safety
             if hasattr(self.policy, 'value_head') and hasattr(self.reference_policy, 'value_head'):
                 self.reference_policy.value_head.load_state_dict(self.policy.value_head.state_dict())
-                logger.info("Updated reference policy value head")
+                logger.debug("Explicitly synced value head state")
         
         # Freeze reference policy parameters
         for param in self.reference_policy.parameters():
