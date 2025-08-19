@@ -148,19 +148,54 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
             raise
         
         # Apply forced mask to keep PPO on-policy
+        # CRITICAL FIX: Ensure forced_mask defaults to False (unforced) not True
         forced_list = getattr(self, '_forced_masks', None)
         if forced_list is not None and len(forced_list) == len(old_log_probs):
+            # Convert to bool tensor explicitly
             forced_mask = torch.tensor(forced_list, dtype=torch.bool, device=self.device)
+            logger.debug(f"Using provided forced mask: {forced_mask.sum().item()}/{len(forced_mask)} forced")
         else:
-            forced_mask = torch.zeros_like(old_log_probs, dtype=torch.bool)
+            # DEFAULT: All steps are UNFORCED (False) unless explicitly marked
+            forced_mask = torch.zeros(len(old_log_probs), dtype=torch.bool, device=self.device)
+            logger.debug(f"Using default unforced mask (all False)")
 
+        # Ensure mask is bool type
+        if forced_mask.dtype != torch.bool:
+            logger.warning(f"Converting forced_mask from {forced_mask.dtype} to bool")
+            forced_mask = forced_mask.bool()
+        
         unforced_mask = ~forced_mask
+        
+        # Log mask stats for debugging
+        forced_count = forced_mask.sum().item()
+        unforced_count = unforced_mask.sum().item()
+        logger.info(f"Mask stats: {forced_count} forced, {unforced_count} unforced out of {len(forced_mask)} total")
 
         # ROBUST PPO RATIO COMPUTATION with empty tensor handling
         # Compute policy ratios with numerical stability on unforced steps
         log_ratios_full = current_log_probs - old_log_probs
         log_ratios_full = torch.clamp(log_ratios_full, min=-20.0, max=2.0)
         ratios_full = torch.exp(log_ratios_full).clamp(1e-8, 1e8)
+        
+        # PRE-OPTIMIZATION LOGGING for debugging (before any failures)
+        try:
+            import wandb
+            if wandb.run:
+                pre_opt_metrics = {
+                    "debug/forced_fraction": forced_mask.float().mean().item() if forced_mask.numel() > 0 else 0.0,
+                    "debug/unforced_count": unforced_mask.sum().item() if unforced_mask.numel() > 0 else 0,
+                    "debug/total_steps": len(advantages) if hasattr(advantages, '__len__') else advantages.numel(),
+                    "debug/ratio_mean_full": ratios_full.mean().item() if ratios_full.numel() > 0 else 1.0,
+                    "debug/ratio_std_full": ratios_full.std().item() if ratios_full.numel() > 1 else 0.0,
+                    "debug/adv_mean": advantages.mean().item() if advantages.numel() > 0 else 0.0,
+                    "debug/adv_std": advantages.std().item() if advantages.numel() > 1 else 0.0,
+                    "debug/old_logprobs_mean": old_log_probs.mean().item() if old_log_probs.numel() > 0 else 0.0,
+                    "debug/current_logprobs_mean": current_log_probs.mean().item() if current_log_probs.numel() > 0 else 0.0,
+                }
+                wandb.log(pre_opt_metrics, commit=False)
+                logger.debug(f"Logged pre-optimization metrics: forced={pre_opt_metrics['debug/forced_fraction']:.2%}")
+        except Exception as e:
+            logger.debug(f"Pre-optimization logging failed (non-critical): {e}")
 
         # Extract unforced data with safety checks
         if unforced_mask.any():
@@ -280,28 +315,86 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
             bc_loss = (-current_log_probs[forced_mask]).mean()
             total_loss = total_loss + 0.01 * bc_loss
         
+        # NaN SAFETY CHECK before optimization
+        if torch.isnan(total_loss) or torch.isinf(total_loss):
+            logger.error(f"⚠️ NaN/Inf detected in total_loss! Skipping optimization step")
+            self.optimizer.zero_grad(set_to_none=True)
+            
+            # Log the skip
+            try:
+                import wandb
+                if wandb.run:
+                    wandb.log({"trainer/nan_skips": 1, "trainer/nan_loss": 1}, commit=False)
+            except:
+                pass
+            
+            return {
+                "policy_loss": 0.0,
+                "value_loss": 0.0,
+                "kl_divergence": 0.0,
+                "total_loss": 0.0,
+                "grad_norm": 0.0,
+                "nan_skip": 1
+            }
+        
         # FIX 3.1: Proper gradient handling for mixed precision
         grad_norm = self._optimization_step(total_loss)
         
         # Store grad_norm as instance variable for external access
         self.grad_norm = grad_norm
         
+        # POST-OPTIMIZATION LOGGING for success confirmation
+        try:
+            import wandb
+            if wandb.run:
+                post_opt_metrics = {
+                    "trainer/grad_norm": grad_norm,
+                    "trainer/optimization_success": 1,
+                    "trainer/total_loss": total_loss.item() if hasattr(total_loss, 'item') else float(total_loss),
+                }
+                wandb.log(post_opt_metrics, commit=False)
+                logger.debug(f"✅ Optimization successful: grad_norm={grad_norm:.4f}")
+        except Exception as e:
+            logger.debug(f"Post-optimization logging failed (non-critical): {e}")
+        
         # Compile metrics with safe empty tensor handling
+        # CRITICAL FIX: Guard against empty tensors in min/max/std operations
+        if ratios.numel() > 0:
+            ratio_mean = ratios.mean().item()
+            ratio_max = ratios.max().item()
+            ratio_min = ratios.min().item()
+            ratio_std = ratios.std(unbiased=False).item() if ratios.numel() > 1 else 0.0
+        else:
+            ratio_mean = 1.0
+            ratio_max = 1.0
+            ratio_min = 1.0
+            ratio_std = 0.0
+            logger.warning("⚠️ Empty ratios tensor - using default values")
+        
+        if advantages.numel() > 0:
+            adv_mean = advantages.mean().item()
+            adv_std = advantages.std(unbiased=False).item() if advantages.numel() > 1 else 0.0
+        else:
+            adv_mean = 0.0
+            adv_std = 0.0
+            logger.warning("⚠️ Empty advantages tensor - using default values")
+        
         metrics = {
-            "policy_loss": policy_loss.item(),
-            "kl_divergence": kl_divergence.item(),
-            "kl_penalty": kl_penalty.item(),
-            "total_loss": total_loss.item(),
-            "avg_ratio": ratios.mean().item() if ratios.numel() > 0 else 1.0,
-            "max_ratio": ratios.max().item() if ratios.numel() > 0 else 1.0,
-            "min_ratio": ratios.min().item() if ratios.numel() > 0 else 1.0,
-            "avg_advantage": advantages.mean().item() if advantages.numel() > 0 else 0.0,
-            "std_advantage": advantages.std().item() if advantages.numel() > 0 else 0.0,
+            "policy_loss": policy_loss.item() if hasattr(policy_loss, 'item') else float(policy_loss),
+            "kl_divergence": kl_divergence.item() if hasattr(kl_divergence, 'item') else float(kl_divergence),
+            "kl_penalty": kl_penalty.item() if hasattr(kl_penalty, 'item') else float(kl_penalty),
+            "total_loss": total_loss.item() if hasattr(total_loss, 'item') else float(total_loss),
+            "avg_ratio": ratio_mean,
+            "max_ratio": ratio_max,
+            "min_ratio": ratio_min,
+            "std_ratio": ratio_std,
+            "avg_advantage": adv_mean,
+            "std_advantage": adv_std,
             "kl_coef": kl_coef,
             "grad_norm": grad_norm,
             "ppo/forced_fraction": forced_mask.float().mean().item() if forced_mask.numel() > 0 else 0.0,
-            "ppo/unforced_count": int(unforced_mask.sum().item()),
-            "ppo/total_steps": len(advantages),
+            "ppo/unforced_count": int(unforced_mask.sum().item()) if unforced_mask.numel() > 0 else 0,
+            "ppo/total_steps": len(advantages) if hasattr(advantages, '__len__') else advantages.numel(),
         }
         
         if value_loss != 0:

@@ -173,6 +173,15 @@ class VLLMQwenPolicy:
                         # Use last token's hidden state and convert to FP32 for value head
                         last_hidden = hidden_states[:, -1, :].float()
                         value = self.value_head(last_hidden)
+                        
+                        # NaN safety check and clipping
+                        if torch.isnan(value).any() or torch.isinf(value).any():
+                            logger.warning(f"⚠️ NaN/Inf detected in value computation, clamping to safe range")
+                            value = torch.nan_to_num(value, nan=0.0, posinf=10.0, neginf=-10.0)
+                        else:
+                            # Clamp to reasonable range to prevent explosions
+                            value = torch.clamp(value, min=-100.0, max=100.0)
+                        
                         values.append(value.squeeze())
                     else:
                         values.append(torch.tensor(0.0, device=self.device, requires_grad=True))
@@ -220,6 +229,12 @@ class VLLMQwenPolicy:
     def enable_training_mode(self):
         """Enable training mode (alias for compatibility)"""
         self.enable_train_mode()
+    
+    def get_last_sample_logprobs(self):
+        """Return the sample-time logprobs from last generation for PPO"""
+        if hasattr(self, 'last_sample_logprobs'):
+            return self.last_sample_logprobs
+        return None
     
     def generate_action(self, states, max_new_tokens=None, temperature=None, **kwargs):
         """Generate actions for trajectory collection - core method needed by TrajectoryCollector"""
@@ -285,7 +300,7 @@ class VLLMQwenPolicy:
         return processed_responses
     
     def compute_log_probs(self, states, actions, **kwargs):
-        """Compute log probabilities for given state-action pairs"""
+        """Compute log probabilities for given state-action pairs - MEMORY OPTIMIZED"""
         if not hasattr(self, 'training_model') or self.training_model is None:
             raise RuntimeError("No training model available for log prob computation")
         
@@ -294,6 +309,11 @@ class VLLMQwenPolicy:
             logger.warning("⚠️ Model was in eval mode during compute_log_probs, switching to train mode")
             self.training_model.train()
             self.value_head.train()
+        
+        # Enable gradient checkpointing to save memory
+        if hasattr(self.training_model, 'gradient_checkpointing_enable'):
+            self.training_model.gradient_checkpointing_enable()
+            logger.debug("Enabled gradient checkpointing for memory efficiency")
             
         # Ensure states and actions are lists
         if not isinstance(states, list):
@@ -323,91 +343,113 @@ class VLLMQwenPolicy:
             batch_prompts.append(prompt)
             batch_targets.append(action_str)
         
-        # Tokenize all prompts and targets
+        # Process in chunks to avoid OOM
         batch_log_probs = []
+        chunk_size = 4  # Process 4 examples at a time to avoid OOM
         
-        for prompt, target in zip(batch_prompts, batch_targets):
-            # Tokenize prompt and full sequence
-            prompt_tokens = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=1500)
-            full_text = prompt + target
-            full_tokens = self.tokenizer(full_text, return_tensors="pt", truncation=True, max_length=2000)
+        for chunk_start in range(0, len(batch_prompts), chunk_size):
+            chunk_end = min(chunk_start + chunk_size, len(batch_prompts))
+            chunk_prompts = batch_prompts[chunk_start:chunk_end]
+            chunk_targets = batch_targets[chunk_start:chunk_end]
             
-            # Move to device
-            prompt_tokens = {k: v.to(self.device) for k, v in prompt_tokens.items()}
-            full_tokens = {k: v.to(self.device) for k, v in full_tokens.items()}
-            
-            # Get target token positions
-            prompt_len = prompt_tokens["input_ids"].shape[1]
-            target_tokens = full_tokens["input_ids"][:, prompt_len:]
-            
-            # Skip if no target tokens (shouldn't happen with our fallback)
-            if target_tokens.shape[1] == 0:
-                # Force at least one token by tokenizing a single space
-                space_tokens = self.tokenizer(" ", return_tensors="pt")["input_ids"].to(self.device)
-                target_tokens = space_tokens[:, -1:]  # Take last token
-            
-            # Compute logits for the sequence (excluding last token for autoregressive prediction)
-            input_ids = full_tokens["input_ids"][:, :-1]
-            
-            # CRITICAL: Ensure gradients are enabled for the forward pass
-            # This must NOT be in a torch.no_grad() context
-            outputs = self.training_model(input_ids=input_ids)
-            logits = outputs.logits
-            
-            # Note: With 4-bit quantization, logits won't have requires_grad=True directly
-            # because the base model is frozen. Only LoRA adapters are trainable.
-            # The gradient will flow through the LoRA adapters when we compute the loss.
-            
-            # Get logits for target positions
-            target_len = target_tokens.shape[1]
-            if prompt_len > 0 and prompt_len + target_len - 1 <= logits.shape[1]:
-                # Extract logits corresponding to target tokens
-                target_logits = logits[:, prompt_len-1:prompt_len+target_len-1, :]
+            chunk_log_probs = []
+            for prompt, target in zip(chunk_prompts, chunk_targets):
+                # Tokenize prompt and full sequence
+                prompt_tokens = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=1500)
+                full_text = prompt + target
+                full_tokens = self.tokenizer(full_text, return_tensors="pt", truncation=True, max_length=2000)
                 
-                # MEMORY-EFFICIENT LOG PROB COMPUTATION: Use gather instead of log_softmax
-                # This avoids creating large [batch, seq, vocab] tensors
-                if target_logits.shape[1] == target_tokens.shape[1]:
-                    # Gather logits for target tokens: [batch, seq, 1] -> [batch, seq]
-                    token_logits = target_logits.gather(2, target_tokens.unsqueeze(-1)).squeeze(-1)
-                    # Compute log normalization: [batch, seq]
-                    log_normalizers = target_logits.logsumexp(dim=-1)
-                    # Log probabilities = token_logits - log_normalizers
-                    token_log_probs = token_logits - log_normalizers
-                    total_log_prob = token_log_probs.sum()
-                else:
-                    # Compute what we can if there's a mismatch
-                    min_len = min(target_logits.shape[1], target_tokens.shape[1])
-                    if min_len > 0:
-                        target_subset = target_tokens[:, :min_len]
-                        logits_subset = target_logits[:, :min_len, :]
-                        # Memory-efficient log prob computation
-                        token_logits = logits_subset.gather(2, target_subset.unsqueeze(-1)).squeeze(-1)
-                        log_normalizers = logits_subset.logsumexp(dim=-1)
+                # Move to device
+                prompt_tokens = {k: v.to(self.device) for k, v in prompt_tokens.items()}
+                full_tokens = {k: v.to(self.device) for k, v in full_tokens.items()}
+                
+                # Get target token positions
+                prompt_len = prompt_tokens["input_ids"].shape[1]
+                target_tokens = full_tokens["input_ids"][:, prompt_len:]
+                
+                # Skip if no target tokens (shouldn't happen with our fallback)
+                if target_tokens.shape[1] == 0:
+                    # Force at least one token by tokenizing a single space
+                    space_tokens = self.tokenizer(" ", return_tensors="pt")["input_ids"].to(self.device)
+                    target_tokens = space_tokens[:, -1:]  # Take last token
+                
+                # Compute logits for the sequence (excluding last token for autoregressive prediction)
+                input_ids = full_tokens["input_ids"][:, :-1]
+                
+                # Limit sequence length to prevent OOM
+                max_seq_len = 512  # Limit to 512 tokens for memory efficiency
+                if input_ids.shape[1] > max_seq_len:
+                    logger.debug(f"Truncating sequence from {input_ids.shape[1]} to {max_seq_len} tokens")
+                    input_ids = input_ids[:, -max_seq_len:]  # Keep last max_seq_len tokens
+                
+                # CRITICAL: Ensure gradients are enabled for the forward pass
+                # This must NOT be in a torch.no_grad() context
+                # Use autocast for memory efficiency
+                with torch.cuda.amp.autocast(enabled=True, dtype=torch.float16):
+                    outputs = self.training_model(input_ids=input_ids, use_cache=False)  # use_cache=False saves memory
+                    logits = outputs.logits.float()  # Convert back to FP32 for stability
+                
+                # Note: With 4-bit quantization, logits won't have requires_grad=True directly
+                # because the base model is frozen. Only LoRA adapters are trainable.
+                # The gradient will flow through the LoRA adapters when we compute the loss.
+                
+                # Get logits for target positions
+                target_len = target_tokens.shape[1]
+                if prompt_len > 0 and prompt_len + target_len - 1 <= logits.shape[1]:
+                    # Extract logits corresponding to target tokens
+                    target_logits = logits[:, prompt_len-1:prompt_len+target_len-1, :]
+                    
+                    # MEMORY-EFFICIENT LOG PROB COMPUTATION: Use gather instead of log_softmax
+                    # This avoids creating large [batch, seq, vocab] tensors
+                    if target_logits.shape[1] == target_tokens.shape[1]:
+                        # Gather logits for target tokens: [batch, seq, 1] -> [batch, seq]
+                        token_logits = target_logits.gather(2, target_tokens.unsqueeze(-1)).squeeze(-1)
+                        # Compute log normalization: [batch, seq]
+                        log_normalizers = target_logits.logsumexp(dim=-1)
+                        # Log probabilities = token_logits - log_normalizers
                         token_log_probs = token_logits - log_normalizers
                         total_log_prob = token_log_probs.sum()
                     else:
-                        # Last resort: compute log prob for a single space token
-                        space_id = self.tokenizer(" ", return_tensors="pt")["input_ids"][0, -1].to(self.device)
-                        space_logits = logits[:, -1, :]  # Last position
-                        # Memory-efficient computation
-                        space_token_logit = space_logits[0, space_id]
-                        log_normalizer = space_logits.logsumexp(dim=-1)[0]
-                        total_log_prob = space_token_logit - log_normalizer
-            else:
-                # Fallback: compute log prob for end token at last position
-                eos_id = self.tokenizer.eos_token_id or self.tokenizer.pad_token_id
-                if eos_id is not None:
-                    last_logits = logits[:, -1, :]
-                    # Memory-efficient computation
-                    eos_token_logit = last_logits[0, eos_id]
-                    log_normalizer = last_logits.logsumexp(dim=-1)[0]
-                    total_log_prob = eos_token_logit - log_normalizer
+                        # Compute what we can if there's a mismatch
+                        min_len = min(target_logits.shape[1], target_tokens.shape[1])
+                        if min_len > 0:
+                            target_subset = target_tokens[:, :min_len]
+                            logits_subset = target_logits[:, :min_len, :]
+                            # Memory-efficient log prob computation
+                            token_logits = logits_subset.gather(2, target_subset.unsqueeze(-1)).squeeze(-1)
+                            log_normalizers = logits_subset.logsumexp(dim=-1)
+                            token_log_probs = token_logits - log_normalizers
+                            total_log_prob = token_log_probs.sum()
+                        else:
+                            # Last resort: compute log prob for a single space token
+                            space_id = self.tokenizer(" ", return_tensors="pt")["input_ids"][0, -1].to(self.device)
+                            space_logits = logits[:, -1, :]  # Last position
+                            # Memory-efficient computation
+                            space_token_logit = space_logits[0, space_id]
+                            log_normalizer = space_logits.logsumexp(dim=-1)[0]
+                            total_log_prob = space_token_logit - log_normalizer
                 else:
-                    # Very last resort: Use a small value from the logits to maintain gradient connection
-                    # We take the mean of logits to keep it connected to the computation graph
-                    total_log_prob = logits.mean() * 0.0  # Multiply by 0 but keep gradient connection
+                    # Fallback: compute log prob for end token at last position
+                    eos_id = self.tokenizer.eos_token_id or self.tokenizer.pad_token_id
+                    if eos_id is not None:
+                        last_logits = logits[:, -1, :]
+                        # Memory-efficient computation
+                        eos_token_logit = last_logits[0, eos_id]
+                        log_normalizer = last_logits.logsumexp(dim=-1)[0]
+                        total_log_prob = eos_token_logit - log_normalizer
+                    else:
+                        # Very last resort: Use a small value from the logits to maintain gradient connection
+                        # We take the mean of logits to keep it connected to the computation graph
+                        total_log_prob = logits.mean() * 0.0  # Multiply by 0 but keep gradient connection
+                
+                chunk_log_probs.append(total_log_prob)
             
-            batch_log_probs.append(total_log_prob)
+            # Add chunk results to batch
+            batch_log_probs.extend(chunk_log_probs)
+            
+            # Clear cache after each chunk to prevent OOM
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
         
         # Stack log probs and ensure they maintain gradient connection
         stacked_log_probs = torch.stack(batch_log_probs)
@@ -503,19 +545,50 @@ class VLLMQwenPolicy:
         logger.info(f"✅ Verified {lora_count} LoRA parameters require gradients")
         
     def _add_value_head(self):
-        """Add value head for GRPO training"""
+        """Add value head for GRPO training with improved initialization"""
         import torch.nn as nn
         
         hidden_size = self.training_model.config.hidden_size
+        
+        # CRITICAL: Keep value head in FP32 for numerical stability
         self.value_head = nn.Sequential(
             nn.Linear(hidden_size, hidden_size),
             nn.ReLU(),
             nn.Linear(hidden_size, 1)
-        ).to(self.device).float()  # Use FP32 for value head to avoid numerical instability
+        )
+        
+        # Improved initialization to prevent NaNs
+        with torch.no_grad():
+            # Xavier/He initialization for better gradient flow
+            for module in self.value_head.modules():
+                if isinstance(module, nn.Linear):
+                    # Small initialization to prevent exploding values
+                    nn.init.normal_(module.weight, mean=0.0, std=0.02)
+                    if module.bias is not None:
+                        nn.init.zeros_(module.bias)
+        
+        # Move to device and ensure FP32
+        self.value_head = self.value_head.to(self.device).to(torch.float32)
         
         # Ensure all value head parameters require gradients
-        for param in self.value_head.parameters():
+        for name, param in self.value_head.named_parameters():
             param.requires_grad = True
+            logger.debug(f"Value head param {name}: shape={param.shape}, dtype={param.dtype}, requires_grad={param.requires_grad}")
+        
+        # Test forward pass to ensure no NaNs at initialization
+        with torch.no_grad():
+            test_input = torch.randn(1, hidden_size, device=self.device, dtype=torch.float32)
+            test_output = self.value_head(test_input)
+            if torch.isnan(test_output).any() or torch.isinf(test_output).any():
+                logger.error("⚠️ Value head produces NaN/Inf at initialization! Re-initializing...")
+                # Re-initialize with even smaller values
+                for module in self.value_head.modules():
+                    if isinstance(module, nn.Linear):
+                        nn.init.normal_(module.weight, mean=0.0, std=0.01)
+                        if module.bias is not None:
+                            nn.init.zeros_(module.bias)
+            else:
+                logger.info(f"✅ Value head initialized successfully (test output: {test_output.item():.4f})")
         
         logger.info(f"✅ Added value head to model (fp32 for numerical stability, gradients enabled)")
     
@@ -621,28 +694,57 @@ class VLLMQwenPolicy:
             return self._generate_hf(prompts, max_tokens, temperature)
     
     def _generate_vllm(self, prompts: List[str], max_tokens: int, temperature: float) -> List[str]:
-        """Ultra-fast generation with vLLM"""
+        """Ultra-fast generation with vLLM - now captures logprobs for PPO"""
         start_time = time.time()
         
+        # CRITICAL: Request logprobs=1 to get sample-time logprobs for PPO
         sampling_params = SamplingParams(
             max_tokens=max_tokens,
             temperature=temperature,
             top_p=0.9,
             repetition_penalty=1.1,  # Reduce repetition 
             stop=["<|im_end|>", "<|endoftext|>", "\n\n", "user:", "assistant:"],  # Better stopping
-            skip_special_tokens=True
+            skip_special_tokens=True,
+            logprobs=1  # Request logprobs for sampled tokens
         )
         
         # Generate with vLLM
         try:
             outputs = self.vllm_engine.generate(prompts, sampling_params)
             
-            # Extract generated text
+            # Extract generated text AND logprobs
             results = []
+            self.last_sample_logprobs = []  # Store for PPO ratio computation
+            self.last_sample_token_ids = []  # Store token IDs too
+            
             for i, output in enumerate(outputs):
                 if len(output.outputs) > 0:
-                    generated_text = output.outputs[0].text.strip()
+                    completion_output = output.outputs[0]
+                    generated_text = completion_output.text.strip()
                     results.append(generated_text)
+                    
+                    # CRITICAL: Capture sample-time logprobs for PPO
+                    if hasattr(completion_output, 'logprobs') and completion_output.logprobs:
+                        # Extract logprobs for the sampled tokens
+                        sample_logprobs = []
+                        sample_token_ids = []
+                        for logprob_dict in completion_output.logprobs:
+                            if logprob_dict:  # logprob_dict might be None
+                                # Get the top token (the one that was sampled)
+                                top_token = max(logprob_dict.items(), key=lambda x: x[1].logprob if hasattr(x[1], 'logprob') else x[1])
+                                token_id = top_token[0]
+                                logprob_val = top_token[1].logprob if hasattr(top_token[1], 'logprob') else top_token[1]
+                                sample_logprobs.append(logprob_val)
+                                sample_token_ids.append(token_id)
+                        
+                        self.last_sample_logprobs.append(sample_logprobs)
+                        self.last_sample_token_ids.append(sample_token_ids)
+                        logger.debug(f"Captured {len(sample_logprobs)} logprobs for response {i}")
+                    else:
+                        # No logprobs available - will need to compute later
+                        self.last_sample_logprobs.append([])
+                        self.last_sample_token_ids.append([])
+                        logger.debug(f"No logprobs captured for response {i}")
                     
                     if not generated_text:
                         logger.warning(f"⚠️ vLLM generated empty response for prompt {i}")
@@ -651,6 +753,8 @@ class VLLMQwenPolicy:
                 else:
                     logger.error(f"⚠️ vLLM output has no results for prompt {i}")
                     results.append("")
+                    self.last_sample_logprobs.append([])
+                    self.last_sample_token_ids.append([])
             
             generation_time = time.time() - start_time
             logger.info(f"🚀 vLLM generated {len(prompts)} responses in {generation_time:.2f}s ({generation_time/len(prompts):.2f}s each)")
