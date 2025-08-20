@@ -102,16 +102,34 @@ class VLLMQwenPolicy:
         # which causes a mismatch between list and iterator
         trainable_params = []
         
-        # Get LoRA parameters from training model
+        # CRITICAL FIX: Re-enable LoRA gradients if they were disabled
+        # This can happen after certain operations
         if hasattr(self, 'training_model'):
             try:
                 from peft import PeftModel
                 if isinstance(self.training_model, PeftModel):
-                    # For PEFT models, get only the trainable LoRA parameters
+                    # Ensure LoRA is in training mode
+                    self.training_model.train()
+                    
+                    # Re-enable gradients for LoRA parameters if needed
+                    lora_count = 0
                     for name, param in self.training_model.named_parameters():
-                        if param.requires_grad and "lora" in name.lower():
+                        if "lora" in name.lower():
+                            if not param.requires_grad:
+                                logger.warning(f"⚠️ Re-enabling gradient for {name}")
+                                param.requires_grad = True
                             trainable_params.append(param)
+                            lora_count += 1
                             logger.debug(f"Added LoRA param: {name}, shape: {param.shape}")
+                    
+                    if lora_count == 0:
+                        logger.error("❌ No LoRA parameters found! Model may have been reset.")
+                        # Try to re-enable all LoRA parameters
+                        for name, param in self.training_model.named_parameters():
+                            if "lora" in name.lower():
+                                param.requires_grad = True
+                                trainable_params.append(param)
+                                lora_count += 1
                 else:
                     # Regular model - get all parameters that require gradients
                     for name, param in self.training_model.named_parameters():
@@ -134,6 +152,20 @@ class VLLMQwenPolicy:
                 logger.debug(f"Added value head param: {name}, shape: {param.shape}")
         
         count = sum(p.numel() for p in trainable_params)
+        
+        # Debug: Print parameter names to understand what's being returned
+        if len(trainable_params) < 100:  # Only print if small number (likely error case)
+            param_names = []
+            if hasattr(self, 'training_model'):
+                for name, param in self.training_model.named_parameters():
+                    if param.requires_grad:
+                        param_names.append(name)
+            if hasattr(self, 'value_head'):
+                for name, param in self.value_head.named_parameters():
+                    if param.requires_grad:
+                        param_names.append(f"value_head.{name}")
+            logger.warning(f"⚠️ Only {len(trainable_params)} params found! Names: {param_names[:10]}")
+        
         logger.info(f"🔧 get_trainable_parameters() returning {len(trainable_params)} parameters ({count} total elements)")
         
         if len(trainable_params) == 0:
@@ -169,18 +201,24 @@ class VLLMQwenPolicy:
                     
                     # Get value for this state (PRESERVE GRADIENTS FOR TRAINING)
                     if hasattr(self, 'value_head') and self.value_head is not None:
-                        hidden_states = self.training_model(**tokens, output_hidden_states=True).hidden_states[-1]
-                        # Use last token's hidden state and convert to FP32 for value head
-                        last_hidden = hidden_states[:, -1, :].float()
-                        value = self.value_head(last_hidden)
-                        
-                        # NaN safety check and clipping
-                        if torch.isnan(value).any() or torch.isinf(value).any():
-                            logger.warning(f"⚠️ NaN/Inf detected in value computation, clamping to safe range")
-                            value = torch.nan_to_num(value, nan=0.0, posinf=10.0, neginf=-10.0)
-                        else:
-                            # Clamp to reasonable range to prevent explosions
-                            value = torch.clamp(value, min=-100.0, max=100.0)
+                        # CRITICAL: Disable autocast for value computation to ensure FP32
+                        with torch.cuda.amp.autocast(enabled=False):
+                            hidden_states = self.training_model(**tokens, output_hidden_states=True).hidden_states[-1]
+                            # Use last token's hidden state and convert to FP32 for value head
+                            last_hidden = hidden_states[:, -1, :].float()
+                            
+                            # Normalize hidden states before value head to prevent explosions
+                            last_hidden = last_hidden / (last_hidden.norm(dim=-1, keepdim=True) + 1e-8)
+                            
+                            value = self.value_head(last_hidden)
+                            
+                            # NaN safety check and aggressive clipping
+                            if torch.isnan(value).any() or torch.isinf(value).any():
+                                logger.warning(f"⚠️ NaN/Inf detected in value computation, clamping to safe range")
+                                value = torch.nan_to_num(value, nan=0.0, posinf=5.0, neginf=-5.0)
+                            else:
+                                # Clamp to reasonable range to prevent explosions
+                                value = torch.clamp(value, min=-10.0, max=10.0)
                         
                         values.append(value.squeeze())
                     else:
@@ -305,10 +343,13 @@ class VLLMQwenPolicy:
             raise RuntimeError("No training model available for log prob computation")
         
         # CRITICAL: Ensure model is in training mode for gradient computation
-        if not self.training_model.training:
-            logger.warning("⚠️ Model was in eval mode during compute_log_probs, switching to train mode")
+        # BUT don't modify model state unnecessarily as it can reset LoRA
+        was_training = self.training_model.training
+        if not was_training:
+            logger.warning("⚠️ Model was in eval mode during compute_log_probs, temporarily switching to train mode")
             self.training_model.train()
-            self.value_head.train()
+            if hasattr(self, 'value_head'):
+                self.value_head.train()
         
         # Enable gradient checkpointing to save memory
         if hasattr(self.training_model, 'gradient_checkpointing_enable'):
@@ -739,12 +780,12 @@ class VLLMQwenPolicy:
                         
                         self.last_sample_logprobs.append(sample_logprobs)
                         self.last_sample_token_ids.append(sample_token_ids)
-                        logger.debug(f"Captured {len(sample_logprobs)} logprobs for response {i}")
+                        logger.info(f"✅ Captured {len(sample_logprobs)} sample-time logprobs for response {i}, sum={sum(sample_logprobs) if sample_logprobs else 0:.4f}")
                     else:
                         # No logprobs available - will need to compute later
                         self.last_sample_logprobs.append([])
                         self.last_sample_token_ids.append([])
-                        logger.debug(f"No logprobs captured for response {i}")
+                        logger.warning(f"⚠️ No logprobs captured from vLLM for response {i}! Has logprobs attr: {hasattr(completion_output, 'logprobs')}")
                     
                     if not generated_text:
                         logger.warning(f"⚠️ vLLM generated empty response for prompt {i}")

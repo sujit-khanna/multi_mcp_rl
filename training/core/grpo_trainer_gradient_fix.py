@@ -102,18 +102,27 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
                 import os
                 strict_keys = os.getenv("STRICT_TRAJ_KEYS", "1") == "1"
                 
-                # CRITICAL FIX: Always recompute log_probs during training to preserve gradients
-                # Using stored log_probs from trajectory collection causes gradient issues
-                # because they were computed with torch.no_grad()
-                logger.debug(f"Recomputing log_probs for trajectory {traj_idx} to preserve gradients")
-                computed = self.policy.compute_log_probs(traj.states, traj.actions)
-                traj.log_probs = [p for p in computed]
-                
-                # Validate alignment
-                if len(traj.log_probs) != len(traj.actions):
-                    raise ValueError(
-                        f"Trajectory {traj_idx}: log_probs length {len(traj.log_probs)} != actions length {len(traj.actions)}"
-                    )
+                # CRITICAL FIX: Use existing sample-time log_probs if available
+                # These are the "old" log probs for PPO and MUST be from sampling time
+                # NOT recomputed with current model (which would make ratio = 1.0)
+                if hasattr(traj, 'log_probs') and traj.log_probs is not None:
+                    # Log the actual values for debugging
+                    if isinstance(traj.log_probs, list) and len(traj.log_probs) > 0:
+                        sample_val = traj.log_probs[0] if isinstance(traj.log_probs[0], (int, float)) else str(traj.log_probs[0])[:20]
+                        logger.info(f"✅ Using {len(traj.log_probs)} sample-time log_probs for trajectory {traj_idx}, first value: {sample_val}")
+                    else:
+                        logger.debug(f"✅ Using sample-time log_probs for trajectory {traj_idx}")
+                    
+                    # Validate alignment
+                    if len(traj.log_probs) != len(traj.actions):
+                        logger.warning(f"Log_probs length mismatch ({len(traj.log_probs)} vs {len(traj.actions)}), recomputing...")
+                        computed = self.policy.compute_log_probs(traj.states, traj.actions)
+                        traj.log_probs = [p for p in computed]
+                else:
+                    # Fallback: compute with current model (NOT ideal - makes ratio ~1.0)
+                    logger.warning(f"⚠️ No sample-time log_probs for trajectory {traj_idx}! Computing with current model (PPO ratio will be ~1.0)")
+                    computed = self.policy.compute_log_probs(traj.states, traj.actions)
+                    traj.log_probs = [p for p in computed]
                 
                 # Convert to tensors
                 for lp in traj.log_probs:
@@ -136,8 +145,18 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
             if self.grpo_config.get("normalize_advantages", True):
                 advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
             
-            # Compute current log probabilities
-            current_log_probs = self.policy.compute_log_probs(all_states, all_actions)
+            # Use sample-time log probabilities if available, otherwise compute current
+            # CRITICAL: For PPO to work, we need the log_probs from when actions were sampled
+            if all_old_log_probs is not None and len(all_old_log_probs) > 0:
+                # Use sample-time logprobs as the "current" policy logprobs for PPO ratio computation
+                # This is counterintuitive but correct: we want ratio = exp(new_policy - sample_time)
+                # So we need the CURRENT policy logprobs, not the sample-time ones
+                logger.info(f"✅ Sample-time log_probs available, computing current logprobs for PPO ratios")
+                current_log_probs = self.policy.compute_log_probs(all_states, all_actions)
+            else:
+                # Fallback: recompute (will result in PPO ratio ~1.0)
+                logger.warning("⚠️ No sample-time log_probs available, computing with current policy (PPO ratio will be ~1.0)")
+                current_log_probs = self.policy.compute_log_probs(all_states, all_actions)
             
             # Compute reference policy log probabilities for KL penalty
             with torch.no_grad():

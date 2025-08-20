@@ -228,9 +228,21 @@ class GRPOTrainer:
         
         # FIXED: Use policy's get_trainable_parameters method for correct parameter detection
         # This ensures we get the parameters from the properly registered CombinedModel
-        trainable_params = list(self.policy.get_trainable_parameters())
+        raw_params = list(self.policy.get_trainable_parameters())
         
-        logger.info(f"Found {len(trainable_params)} trainable parameters using policy.get_trainable_parameters()")
+        # CRITICAL: Deduplicate parameters by id to avoid optimizer warning
+        seen_ids = set()
+        trainable_params = []
+        for param in raw_params:
+            param_id = id(param)
+            if param_id not in seen_ids:
+                seen_ids.add(param_id)
+                trainable_params.append(param)
+        
+        if len(raw_params) != len(trainable_params):
+            logger.warning(f"Deduplicated parameters: {len(raw_params)} -> {len(trainable_params)}")
+        
+        logger.info(f"Found {len(trainable_params)} unique trainable parameters using policy.get_trainable_parameters()")
         
         if not trainable_params:
             logger.error("No trainable parameters found via policy.get_trainable_parameters()!")

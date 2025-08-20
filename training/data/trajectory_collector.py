@@ -460,28 +460,52 @@ class TrajectoryCollector:
                 # Collect log probabilities if requested
                 log_prob = None
                 if self.collect_log_probs:
-                    try:
-                        # Clear GPU cache before computing log probs to prevent OOM
-                        import torch
-                        if torch.cuda.is_available():
-                            torch.cuda.empty_cache()
-                        
-                        # Get log probability for this action
-                        states = [conversation_history[:-2]]  # State before action
-                        actions = [action]
-                        
-                        # Compute without gradients to save memory
-                        with torch.no_grad():
-                            log_probs = self.policy.compute_log_probs(states, actions)
-                            log_prob = log_probs[0].item() if len(log_probs) > 0 else None
-                    except torch.cuda.OutOfMemoryError:
-                        logger.warning("CUDA OOM when computing log probabilities, using default value")
-                        log_prob = -1.0  # Default value for OOM case
-                        if torch.cuda.is_available():
-                            torch.cuda.empty_cache()
-                    except Exception as e:
-                        logger.warning(f"Failed to compute log probabilities: {e}")
-                        log_prob = -1.0  # Default value for other errors
+                    # CRITICAL FIX: Use sample-time logprobs from vLLM if available
+                    # This is essential for proper PPO ratio computation
+                    sample_time_logprob = None
+                    if hasattr(self.policy, 'get_last_sample_logprobs'):
+                        sample_logprobs = self.policy.get_last_sample_logprobs()
+                        # vLLM generates one response at a time, so we always use index 0
+                        if sample_logprobs and len(sample_logprobs) > 0:
+                            # Get the logprobs for the FIRST (and only) response
+                            turn_logprobs = sample_logprobs[0]  # Always index 0 for single generation
+                            if turn_logprobs:
+                                # Sum the logprobs for all tokens in this action
+                                sample_time_logprob = sum(turn_logprobs) if isinstance(turn_logprobs, list) else turn_logprobs
+                                logger.info(f"✅ Using sample-time logprob for turn {turn}: {sample_time_logprob:.4f}")
+                            else:
+                                logger.warning(f"⚠️ Empty logprobs list for turn {turn}")
+                        else:
+                            logger.warning(f"⚠️ No sample logprobs available from vLLM for turn {turn}")
+                    
+                    if sample_time_logprob is not None:
+                        log_prob = sample_time_logprob
+                    else:
+                        # Fallback: compute with current model (NOT ideal for PPO)
+                        if turn == 0:  # Only warn once per episode
+                            logger.warning("No sample-time logprobs available, computing with current model (PPO ratio will be ~1.0!)")
+                        try:
+                            # Clear GPU cache before computing log probs to prevent OOM
+                            import torch
+                            if torch.cuda.is_available():
+                                torch.cuda.empty_cache()
+                            
+                            # Get log probability for this action
+                            states = [conversation_history[:-2]]  # State before action
+                            actions = [action]
+                            
+                            # Compute without gradients to save memory
+                            with torch.no_grad():
+                                log_probs = self.policy.compute_log_probs(states, actions)
+                                log_prob = log_probs[0].item() if len(log_probs) > 0 else None
+                        except torch.cuda.OutOfMemoryError:
+                            logger.warning("CUDA OOM when computing log probabilities, using default value")
+                            log_prob = -1.0  # Default value for OOM case
+                            if torch.cuda.is_available():
+                                torch.cuda.empty_cache()
+                        except Exception as e:
+                            logger.warning(f"Failed to compute log probabilities: {e}")
+                            log_prob = -1.0  # Default value for other errors
                 
                 # Create turn data
                 turn_data = {
