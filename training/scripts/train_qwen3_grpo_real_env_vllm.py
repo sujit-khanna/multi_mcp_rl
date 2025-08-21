@@ -18,6 +18,10 @@ import copy
 import json
 import logging
 import os
+import warnings
+
+# Suppress the gradient checkpointing + caching warning that floods logs
+warnings.filterwarnings('ignore', message='.*Caching is incompatible with gradient checkpointing.*')
 import sys
 import time
 import asyncio
@@ -201,8 +205,10 @@ class VLLMQwenPolicy:
                     
                     # Get value for this state (PRESERVE GRADIENTS FOR TRAINING)
                     if hasattr(self, 'value_head') and self.value_head is not None:
+                        # CRITICAL: Ensure training mode for gradient flow
+                        self.value_head.train()
                         # CRITICAL: Disable autocast for value computation to ensure FP32
-                        with torch.cuda.amp.autocast(enabled=False):
+                        with torch.amp.autocast('cuda', enabled=False):
                             hidden_states = self.training_model(**tokens, output_hidden_states=True).hidden_states[-1]
                             # Use last token's hidden state and convert to FP32 for value head
                             last_hidden = hidden_states[:, -1, :].float()
@@ -283,35 +289,52 @@ class VLLMQwenPolicy:
         formatted_inputs = []
         for state in states:
             if isinstance(state, list):
-                # Convert conversation history to text with tool calling guidance
-                conversation_text = "You are a tool assistant. Generate tool calls in this format: <tool_call>{\"name\": \"tool_name\", \"arguments\": {\"key\": \"value\"}}</tool_call>\n\n"
-                conversation_text += "Available tools: fmp_get_quote, polygon_get_aggs, execute_python, tavily_search, send_slack_message\n\n"
+                # FIXED: Use Qwen's proper chat template format with conversation truncation
+                conversation_text = "<|im_start|>system\nYou are a tool assistant. Generate tool calls in this format: <tool_call>{\"name\": \"tool_name\", \"arguments\": {\"key\": \"value\"}}</tool_call>\n\nAvailable tools: fmp_get_quote, polygon_get_aggs, execute_python, tavily_search, send_slack_message<|im_end|>\n"
                 
-                for msg in state:
+                # CRITICAL FIX: Truncate conversation to stay within token limits
+                # Keep system message + last N messages to avoid exceeding max_model_len
+                max_history_messages = 8  # Adjust based on typical message length
+                
+                if len(state) > max_history_messages:
+                    # Keep first message (usually user task) + recent messages
+                    truncated_state = [state[0]] + state[-(max_history_messages-1):]
+                    logger.debug(f"Truncated conversation from {len(state)} to {len(truncated_state)} messages")
+                else:
+                    truncated_state = state
+                
+                for msg in truncated_state:
                     role = msg.get("role", "user")
                     content = msg.get("content", "")
-                    conversation_text += f"{role}: {content}\n"
-                conversation_text += "assistant: "
+                    # Also truncate individual messages if they're too long
+                    if len(content) > 1000:
+                        content = content[:1000] + "... (truncated)"
+                    conversation_text += f"<|im_start|>{role}\n{content}<|im_end|>\n"
+                    
+                conversation_text += "<|im_start|>assistant\n"
                 formatted_inputs.append(conversation_text)
             else:
-                # Add tool calling guidance to single state
-                guided_prompt = "You are a tool assistant. Generate tool calls in this format: <tool_call>{\"name\": \"tool_name\", \"arguments\": {\"key\": \"value\"}}</tool_call>\n\n"
-                guided_prompt += f"Task: {str(state)}\n\nassistant: "
+                # FIXED: Use Qwen's proper chat template for single state
+                guided_prompt = "<|im_start|>system\nYou are a tool assistant. Generate tool calls in this format: <tool_call>{\"name\": \"tool_name\", \"arguments\": {\"key\": \"value\"}}</tool_call><|im_end|>\n"
+                guided_prompt += f"<|im_start|>user\n{str(state)}<|im_end|>\n"
+                guided_prompt += "<|im_start|>assistant\n"
                 formatted_inputs.append(guided_prompt)
         
         # Use vLLM or HuggingFace for generation with better parameters
         responses = self.generate(
             formatted_inputs, 
-            max_tokens=max_new_tokens or 256,  # Reduced to focus on tool calls
-            temperature=temperature or 0.3  # Increased for more diverse generation
+            max_tokens=max_new_tokens or 128,  # Focused on tool calls 
+            temperature=temperature or 0.7  # Higher temperature for diverse generation
         )
         
         # Handle empty responses and encourage tool calls
         processed_responses = []
         for i, response in enumerate(responses):
             if not response or len(response.strip()) == 0:
-                # Generate contextual fallback tool call
-                logger.warning("Empty response generated, using contextual fallback tool call")
+                # CRITICAL: Log this as an error since it breaks training
+                logger.error(f"🚨 Empty response generated for prompt {i}! This breaks RL training!")
+                logger.debug(f"Prompt was: {formatted_inputs[i][:200]}...")
+                logger.warning("Using contextual fallback tool call (NOT IDEAL FOR TRAINING)")
                 context = str(formatted_inputs[i]).lower()
                 
                 # Contextual fallback based on input
@@ -351,10 +374,13 @@ class VLLMQwenPolicy:
             if hasattr(self, 'value_head'):
                 self.value_head.train()
         
-        # Enable gradient checkpointing to save memory
+        # Configure gradient checkpointing and caching (mutually exclusive)
         if hasattr(self.training_model, 'gradient_checkpointing_enable'):
             self.training_model.gradient_checkpointing_enable()
-            logger.debug("Enabled gradient checkpointing for memory efficiency")
+            # Ensure caching is disabled when gradient checkpointing is enabled
+            if hasattr(self.training_model.config, 'use_cache'):
+                self.training_model.config.use_cache = False
+            logger.debug("Enabled gradient checkpointing and disabled caching for memory efficiency")
             
         # Ensure states and actions are lists
         if not isinstance(states, list):
@@ -425,10 +451,21 @@ class VLLMQwenPolicy:
                 
                 # CRITICAL: Ensure gradients are enabled for the forward pass
                 # This must NOT be in a torch.no_grad() context
-                # Use autocast for memory efficiency
-                with torch.cuda.amp.autocast(enabled=True, dtype=torch.float16):
+                # Force training mode to ensure gradients flow
+                self.training_model.train()
+                
+                # Use autocast for memory efficiency but preserve gradients
+                with torch.amp.autocast('cuda', enabled=True, dtype=torch.float16):
                     outputs = self.training_model(input_ids=input_ids, use_cache=False)  # use_cache=False saves memory
                     logits = outputs.logits.float()  # Convert back to FP32 for stability
+                
+                # Verify gradients are flowing
+                if not any(p.requires_grad for p in self.training_model.parameters()):
+                    logger.error("🚨 NO PARAMETERS REQUIRE GRADIENTS!")
+                    # Force enable gradients for LoRA parameters
+                    for name, param in self.training_model.named_parameters():
+                        if "lora_" in name:
+                            param.requires_grad = True
                 
                 # Note: With 4-bit quantization, logits won't have requires_grad=True directly
                 # because the base model is frozen. Only LoRA adapters are trainable.
@@ -505,7 +542,7 @@ class VLLMQwenPolicy:
             logger.info("🔥 Initializing vLLM for ultra-fast inference...")
             
             # Ensure we're using the correct context length from environment
-            max_model_len = int(os.getenv("VLLM_MAX_MODEL_LEN", "4096"))
+            max_model_len = int(os.getenv("VLLM_MAX_MODEL_LEN", "8192"))  # Increased for longer conversations
             logger.info(f"🔧 Setting vLLM max_model_len to {max_model_len}")
             
             self.vllm_engine = LLM(
@@ -739,16 +776,25 @@ class VLLMQwenPolicy:
         start_time = time.time()
         
         # CRITICAL: Request logprobs=1 to get sample-time logprobs for PPO
+        # FIXED: Removed aggressive stop tokens that were causing empty generation
         sampling_params = SamplingParams(
             max_tokens=max_tokens,
             temperature=temperature,
             top_p=0.9,
-            repetition_penalty=1.1,  # Reduce repetition 
-            stop=["<|im_end|>", "<|endoftext|>", "\n\n", "user:", "assistant:"],  # Better stopping
-            skip_special_tokens=True,
+            repetition_penalty=1.05,  # Slight repetition penalty
+            stop=["<|im_end|>"],  # Only use the actual end token for Qwen
+            skip_special_tokens=False,  # Don't skip special tokens during generation
             logprobs=1  # Request logprobs for sampled tokens
         )
         
+        # DEBUG: Log prompts being sent to vLLM with length check
+        for i, prompt in enumerate(prompts):
+            # Rough token estimation (1 token ≈ 4 characters for most models)
+            estimated_tokens = len(prompt) // 4
+            if estimated_tokens > 3500:  # Leave some buffer for generation
+                logger.warning(f"⚠️ Prompt {i} estimated at {estimated_tokens} tokens (may exceed vLLM limit)")
+            logger.debug(f"📝 vLLM prompt {i} ({estimated_tokens} est. tokens): {prompt[:200]}..." if len(prompt) > 200 else f"📝 vLLM prompt {i}: {prompt}")
+            
         # Generate with vLLM
         try:
             outputs = self.vllm_engine.generate(prompts, sampling_params)
@@ -761,7 +807,13 @@ class VLLMQwenPolicy:
             for i, output in enumerate(outputs):
                 if len(output.outputs) > 0:
                     completion_output = output.outputs[0]
-                    generated_text = completion_output.text.strip()
+                    raw_text = completion_output.text
+                    generated_text = raw_text.strip()
+                    
+                    # DEBUG: Log what vLLM actually generated
+                    logger.info(f"🔍 vLLM raw output {i}: '{raw_text}' (length: {len(raw_text)})")
+                    logger.info(f"🔍 vLLM stripped output {i}: '{generated_text}' (length: {len(generated_text)})")
+                    
                     results.append(generated_text)
                     
                     # CRITICAL: Capture sample-time logprobs for PPO
@@ -824,7 +876,8 @@ class VLLMQwenPolicy:
                     temperature=temperature,
                     do_sample=True,
                     top_p=0.9,
-                    pad_token_id=self.tokenizer.pad_token_id
+                    pad_token_id=self.tokenizer.pad_token_id,
+                    use_cache=False  # Disable caching to avoid conflicts with gradient checkpointing
                 )
             
             generated_text = self.tokenizer.decode(outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
@@ -886,14 +939,29 @@ class VLLMQwenPolicy:
             trainable_params.append(param)
         
         # Debug: Log the number of trainable parameters and their gradient status
-        logger.info(f"🔧 Found {len(trainable_params)} trainable parameters")
-        if len(trainable_params) == 0:
-            logger.error("⚠️ NO TRAINABLE PARAMETERS FOUND!")
+        trainable_count = sum(1 for p in trainable_params if p.requires_grad)
+        logger.info(f"🔧 Found {len(trainable_params)} trainable parameters ({trainable_count} require gradients)")
+        
+        if len(trainable_params) == 0 or trainable_count == 0:
+            logger.error("🚨 CRITICAL: NO TRAINABLE PARAMETERS FOUND!")
             logger.error("Checking training_model state:")
             logger.error(f"  training_model.training: {self.training_model.training}")
-            # List all parameters to debug
-            for name, param in list(self.training_model.named_parameters())[:10]:
-                logger.error(f"  {name}: requires_grad={param.requires_grad}, shape={param.shape}")
+            logger.error(f"  value_head.training: {self.value_head.training}")
+            
+            # Force enable gradients for all LoRA and value head parameters
+            for name, param in self.training_model.named_parameters():
+                if "lora_" in name:
+                    param.requires_grad = True
+                    trainable_params.append(param)
+                    logger.info(f"🔧 FORCED gradient for LoRA: {name}")
+            
+            for param in self.value_head.parameters():
+                param.requires_grad = True
+                if param not in trainable_params:
+                    trainable_params.append(param)
+                logger.info(f"🔧 FORCED gradient for value_head parameter")
+            
+            logger.info(f"🔧 After forcing: {len(trainable_params)} trainable parameters")
         
         return iter(trainable_params)  # Return iterator like nn.Module.parameters()
     
@@ -1051,7 +1119,15 @@ async def main():
         
         # Collect episodes using real environment with vLLM speed
         start_time = time.time()
-        episode_results = await collector.collect_batch(training_data[:4])  # Use small batch for efficiency
+        # FIXED: Use random sampling from ALL training data instead of just first 4 samples
+        import random
+        batch_size = training_config.get("batch_size", 4)  # Use training config batch_size
+        training_batch = random.sample(training_data, min(batch_size, len(training_data)))
+        
+        logger.info(f"📊 Using {len(training_batch)} samples from {len(training_data)} total training examples")
+        logger.debug(f"Task IDs: {[task.get('task_metadata', {}).get('task_id', 'unknown') for task in training_batch]}")
+        
+        episode_results = await collector.collect_batch(training_batch)
         collection_time = time.time() - start_time
         
         logger.info(f"⚡ Collected {len(episode_results)} episodes in {collection_time:.2f}s")

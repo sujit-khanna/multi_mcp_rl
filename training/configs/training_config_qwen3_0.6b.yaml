@@ -14,7 +14,7 @@ output_dir: "./outputs/qwen3-0.6b-grpo"
 
 # Training hyperparameters
 num_epochs: 3  # Reduced for quick testing
-batch_size: 1  # Reduced to 1 for MPS memory constraints
+batch_size: 4  # Use 4 for proper GRPO training efficiency
 learning_rate: 5e-5  # Higher LR for smaller model
 weight_decay: 0.01
 warmup_steps: 100

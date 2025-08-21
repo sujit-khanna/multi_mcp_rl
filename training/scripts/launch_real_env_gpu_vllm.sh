@@ -57,7 +57,7 @@ export STRICT_TRAJ_KEYS="1"                # Strict trajectory key validation
 # vLLM-specific settings for memory optimization
 export ENABLE_VLLM="$ENABLE_VLLM"          # Enable/disable vLLM
 export VLLM_GPU_MEMORY_UTILIZATION="0.6"   # Increased for training efficiency
-export VLLM_MAX_MODEL_LEN="4096"           # Support longer sequences for multi-turn conversations
+export VLLM_MAX_MODEL_LEN="8192"           # Support longer sequences for multi-turn conversations
 export VLLM_USE_TRITON_FLASH_ATTN="true"   # Enable FlashAttention
 export VLLM_ATTENTION_BACKEND="FLASH_ATTN" # Use FlashAttention backend
 export VLLM_WORKER_MULTIPROC_METHOD="spawn" # Multiprocessing method
