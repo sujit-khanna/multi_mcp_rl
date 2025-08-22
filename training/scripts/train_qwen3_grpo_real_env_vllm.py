@@ -18,7 +18,9 @@ import copy
 import json
 import logging
 import os
+import random
 import warnings
+import numpy as np
 
 # Suppress the gradient checkpointing + caching warning that floods logs
 warnings.filterwarnings('ignore', message='.*Caching is incompatible with gradient checkpointing.*')
@@ -77,6 +79,20 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+
+def _seed_everything(seed: int = 42):
+    """Seed all random number generators for reproducible training runs"""
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    import torch
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    # Keep cudnn non-deterministic for speed unless exact reproducibility needed
+    torch.backends.cudnn.benchmark = True
+    torch.backends.cudnn.deterministic = False
+    logger.info(f"🎲 Seeded all RNGs with seed={seed}")
 
 
 class VLLMQwenPolicy:
@@ -612,15 +628,23 @@ class VLLMQwenPolicy:
         self.training_model.train()
         self.value_head.train()
         
-        # Double-check LoRA parameters still require gradients after all initialization
-        lora_count = 0
-        for name, param in self.training_model.named_parameters():
-            if "lora_" in name:
-                if not param.requires_grad:
-                    logger.warning(f"⚠️ Forcing LoRA parameter {name} to require gradients")
-                    param.requires_grad = True
-                lora_count += 1
-        logger.info(f"✅ Verified {lora_count} LoRA parameters require gradients")
+        # CRITICAL: Count and verify trainable parameters after full initialization
+        lora_params = [p for name, p in self.training_model.named_parameters() if "lora_" in name and p.requires_grad]
+        value_params = [p for p in self.value_head.parameters() if p.requires_grad]
+        
+        n_lora = sum(p.numel() for p in lora_params)
+        n_value = sum(p.numel() for p in value_params) 
+        n_trainable = n_lora + n_value
+        n_total = sum(p.numel() for p in self.training_model.parameters())
+        
+        logger.info(f"🧠 Trainable parameters: {n_trainable:,} of {n_total:,} "
+                   f"({n_trainable / max(1,n_total):.2%}) [LoRA: {n_lora:,}, Value: {n_value:,}]")
+        
+        if n_trainable == 0:
+            logger.error("🚨 CRITICAL: NO TRAINABLE PARAMETERS FOUND!")
+            logger.error(f"  LoRA params requiring grad: {len(lora_params)}")
+            logger.error(f"  Value params requiring grad: {len(value_params)}")
+            raise RuntimeError("No trainable parameters. Check LoRA injection and value head initialization.")
         
     def _add_value_head(self):
         """Add value head for GRPO training with improved initialization"""
@@ -751,15 +775,23 @@ class VLLMQwenPolicy:
         self.training_model.train()
         self.value_head.train()
         
-        # Double-check LoRA parameters still require gradients after all initialization
-        lora_count = 0
-        for name, param in self.training_model.named_parameters():
-            if "lora_" in name:
-                if not param.requires_grad:
-                    logger.warning(f"⚠️ Forcing LoRA parameter {name} to require gradients")
-                    param.requires_grad = True
-                lora_count += 1
-        logger.info(f"✅ Verified {lora_count} LoRA parameters require gradients")
+        # CRITICAL: Count and verify trainable parameters after full initialization
+        lora_params = [p for name, p in self.training_model.named_parameters() if "lora_" in name and p.requires_grad]
+        value_params = [p for p in self.value_head.parameters() if p.requires_grad]
+        
+        n_lora = sum(p.numel() for p in lora_params)
+        n_value = sum(p.numel() for p in value_params) 
+        n_trainable = n_lora + n_value
+        n_total = sum(p.numel() for p in self.training_model.parameters())
+        
+        logger.info(f"🧠 Trainable parameters: {n_trainable:,} of {n_total:,} "
+                   f"({n_trainable / max(1,n_total):.2%}) [LoRA: {n_lora:,}, Value: {n_value:,}]")
+        
+        if n_trainable == 0:
+            logger.error("🚨 CRITICAL: NO TRAINABLE PARAMETERS FOUND!")
+            logger.error(f"  LoRA params requiring grad: {len(lora_params)}")
+            logger.error(f"  Value params requiring grad: {len(value_params)}")
+            raise RuntimeError("No trainable parameters. Check LoRA injection and value head initialization.")
         
         logger.info("✅ HuggingFace model initialized")
     
@@ -775,14 +807,15 @@ class VLLMQwenPolicy:
         """Ultra-fast generation with vLLM - now captures logprobs for PPO"""
         start_time = time.time()
         
-        # CRITICAL: Request logprobs=1 to get sample-time logprobs for PPO
-        # FIXED: Removed aggressive stop tokens that were causing empty generation
+        # CRITICAL: Prevent empty/very short completions with min_tokens
+        # vLLM uses `max_tokens` (not `max_new_tokens`); `min_tokens` prevents empty generation
         sampling_params = SamplingParams(
             max_tokens=max_tokens,
+            min_tokens=8,  # Prevent empty/single-token completions
             temperature=temperature,
             top_p=0.9,
             repetition_penalty=1.05,  # Slight repetition penalty
-            stop=["<|im_end|>"],  # Only use the actual end token for Qwen
+            stop=None,  # Let eos_token_id govern stopping to avoid premature termination
             skip_special_tokens=False,  # Don't skip special tokens during generation
             logprobs=1  # Request logprobs for sampled tokens
         )
@@ -795,9 +828,36 @@ class VLLMQwenPolicy:
                 logger.warning(f"⚠️ Prompt {i} estimated at {estimated_tokens} tokens (may exceed vLLM limit)")
             logger.debug(f"📝 vLLM prompt {i} ({estimated_tokens} est. tokens): {prompt[:200]}..." if len(prompt) > 200 else f"📝 vLLM prompt {i}: {prompt}")
             
-        # Generate with vLLM
+        # Generate with vLLM - with empty generation handling
         try:
             outputs = self.vllm_engine.generate(prompts, sampling_params)
+            
+            # Check for empty generations and resample once if needed
+            empty_outputs = []
+            for i, output in enumerate(outputs):
+                if not (output.outputs and output.outputs[0].text.strip()):
+                    empty_outputs.append(i)
+            
+            # Resample empty generations with higher temperature
+            if empty_outputs:
+                logger.warning(f"🔄 Resampling {len(empty_outputs)} empty generations with higher temperature")
+                resample_prompts = [prompts[i] for i in empty_outputs]
+                resample_params = SamplingParams(
+                    max_tokens=max_tokens,
+                    min_tokens=16,  # Higher minimum for resampling
+                    temperature=max(0.7, temperature),  # Higher temperature
+                    top_p=max(0.9, 0.9),
+                    repetition_penalty=1.1,  # Stronger repetition penalty
+                    stop=None,
+                    skip_special_tokens=False,
+                    logprobs=1
+                )
+                resample_outputs = self.vllm_engine.generate(resample_prompts, resample_params)
+                
+                # Replace empty outputs with resampled ones
+                for j, empty_idx in enumerate(empty_outputs):
+                    if j < len(resample_outputs):
+                        outputs[empty_idx] = resample_outputs[j]
             
             # Extract generated text AND logprobs
             results = []
@@ -976,6 +1036,22 @@ class VLLMQwenPolicy:
         self.value_head.eval()
 
 
+def update_reference_policy_ema(reference_policy, current_policy, alpha=0.05):
+    """Update reference policy using Exponential Moving Average (EMA)"""
+    with torch.no_grad():
+        # Update training model parameters
+        for ref_param, cur_param in zip(reference_policy.training_model.parameters(), 
+                                        current_policy.training_model.parameters()):
+            # EMA update: ref = (1-alpha) * ref + alpha * current
+            ref_param.data.copy_(ref_param.data * (1.0 - alpha) + cur_param.data * alpha)
+        
+        # Update value head parameters
+        for ref_param, cur_param in zip(reference_policy.value_head.parameters(), 
+                                        current_policy.value_head.parameters()):
+            # EMA update: ref = (1-alpha) * ref + alpha * current
+            ref_param.data.copy_(ref_param.data * (1.0 - alpha) + cur_param.data * alpha)
+
+
 async def main():
     """Main training function with vLLM integration"""
     
@@ -984,7 +1060,11 @@ async def main():
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--mixed-precision", type=str, default="fp16")
     parser.add_argument("--enable-profiling", action="store_true")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
     args = parser.parse_args()
+    
+    # Seed everything for reproducible runs
+    _seed_everything(args.seed)
     
     logger.info("🚀 Starting vLLM-Enhanced GRPO Training")
     logger.info(f"vLLM Available: {VLLM_AVAILABLE}")
@@ -1077,8 +1157,15 @@ async def main():
     training_config = config.get("training", {})
     model_config = config.get("model", {})
     
-    # Initialize reference policy (shared instance for memory efficiency)
+    # Initialize reference policy (use main policy temporarily to avoid issues)  
+    logger.info("🔄 Using main policy as reference (KL divergence will be 0 initially)...")
+    
+    # TEMPORARY SOLUTION: Use main policy as reference to avoid quantization issues
+    # This means KL divergence will be 0, but training can proceed
+    # TODO: Implement proper reference policy after training is stable
     reference_policy = policy
+    
+    logger.info("✅ Reference policy set (temporary - using main policy)")
     
     # Setup GRPO config
     grpo_config = {
@@ -1095,7 +1182,7 @@ async def main():
     # Initialize GRPO trainer (using working trainer)
     trainer = GRPOTrainerGradientFix(
         policy=policy,
-        reference_policy=reference_policy,
+        reference_policy=reference_policy,  # Same as policy for now (KL divergence = 0)
         grpo_config=grpo_config,
         training_config=training_config,
         device=torch.device(args.device),
@@ -1240,6 +1327,12 @@ async def main():
                 
             logger.info(f"✅ Training step completed in {train_time:.2f}s")
             logger.info(f"📊 Metrics: {metrics}")
+            
+            # TODO: Implement proper reference policy creation once training is stable
+            # For now, KL divergence will be 0 since reference_policy = policy
+            global_step = (epoch - 1) * training_config.get("epochs_per_update", 1) + 1
+            if global_step % 10 == 0:
+                logger.info(f"⚠️  Step {global_step}: KL divergence is 0 (using same policy as reference)")
         else:
             logger.warning("⚠️ No valid trajectories collected, skipping training step")
             

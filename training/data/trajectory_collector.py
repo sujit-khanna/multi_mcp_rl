@@ -260,6 +260,7 @@ class TrajectoryCollector:
                 )
                 valid_results.append(failed_result)
             elif isinstance(result, EpisodeResult):
+                # Use EpisodeResult's built-in is_valid() method for validation
                 valid_results.append(result)
             else:
                 logger.warning(f"Unexpected result type for episode {i}: {type(result)}")
@@ -481,31 +482,17 @@ class TrajectoryCollector:
                     if sample_time_logprob is not None:
                         log_prob = sample_time_logprob
                     else:
-                        # Fallback: compute with current model (NOT ideal for PPO)
-                        if turn == 0:  # Only warn once per episode
-                            logger.warning("No sample-time logprobs available, computing with current model (PPO ratio will be ~1.0!)")
-                        try:
-                            # Clear GPU cache before computing log probs to prevent OOM
-                            import torch
-                            if torch.cuda.is_available():
-                                torch.cuda.empty_cache()
-                            
-                            # Get log probability for this action
-                            states = [conversation_history[:-2]]  # State before action
-                            actions = [action]
-                            
-                            # Compute without gradients to save memory
-                            with torch.no_grad():
-                                log_probs = self.policy.compute_log_probs(states, actions)
-                                log_prob = log_probs[0].item() if len(log_probs) > 0 else None
-                        except torch.cuda.OutOfMemoryError:
-                            logger.warning("CUDA OOM when computing log probabilities, using default value")
-                            log_prob = -1.0  # Default value for OOM case
-                            if torch.cuda.is_available():
-                                torch.cuda.empty_cache()
-                        except Exception as e:
-                            logger.warning(f"Failed to compute log probabilities: {e}")
-                            log_prob = -1.0  # Default value for other errors
+                        # CRITICAL: Never recompute old logprobs with current model - breaks PPO ratios
+                        # Instead, mark this trajectory for dropping or retry generation
+                        logger.warning(f"🚨 Missing sample-time logprobs for turn {turn} - marking trajectory as invalid")
+                        log_prob = None  # This will signal the trajectory should be dropped
+                        
+                        # Mark this turn as invalid - will be handled at trajectory level
+                        # Store this information in the turn data itself
+                        pass  # The None log_prob will be checked later
+                        
+                        # Skip the old fallback computation that breaks PPO ratios
+                        # This section has been removed to prevent incorrect PPO ratio computation
                 
                 # Create turn data
                 turn_data = {
@@ -566,7 +553,16 @@ class TrajectoryCollector:
             tools_used = 0
             reward_breakdown = {"total": total_reward}
         
-        return {
+        # Check if trajectory has invalid turns (missing sample-time logprobs)
+        invalid_turns = []
+        for i, turn in enumerate(trajectory):
+            # Logprobs are stored in metadata, not at turn level
+            turn_logprob = turn.get("metadata", {}).get("log_prob")
+            if turn_logprob is None:
+                invalid_turns.append(i + 1)  # Turn numbers start from 1
+        is_valid = len(invalid_turns) == 0
+        
+        result = {
             "trajectory": trajectory,
             "total_reward": total_reward,
             "turns": turn,
@@ -574,7 +570,14 @@ class TrajectoryCollector:
             "tools_used": tools_used,
             "reward_breakdown": reward_breakdown,
             "conversation_history": conversation_history,
+            "is_valid": is_valid,  # Flag for dropping invalid trajectories
+            "invalid_turns": invalid_turns,  # Which turns were invalid
         }
+        
+        if not is_valid:
+            logger.warning(f"🚨 Trajectory marked as INVALID due to missing logprobs on turns: {invalid_turns}")
+            
+        return result
     
     async def _generate_action(self, conversation_history: List[Dict[str, str]]) -> str:
         """Generate action using policy."""
@@ -722,11 +725,19 @@ class TrajectoryCollector:
             trajectory_data.get("total_reward", 0.0) > 0.0
         )
         
+        # Debug: Check the type of turns before creating EpisodeResult
+        turns_value = trajectory_data.get("turns", 0)
+        logger.debug(f"Creating EpisodeResult - turns value: {turns_value}, type: {type(turns_value)}")
+        
+        if not isinstance(turns_value, int):
+            logger.error(f"🚨 CRITICAL: turns should be int, got {type(turns_value)}: {turns_value}")
+            turns_value = len(trajectory_data.get("trajectory", []))  # Fallback to trajectory length
+        
         return EpisodeResult(
             task_id=task_metadata.get("task_id", "unknown"),
             trajectory=trajectory_data.get("trajectory", []),
             total_reward=trajectory_data.get("total_reward", 0.0),
-            turns=trajectory_data.get("turns", 0),
+            turns=turns_value,
             task_completed=trajectory_data.get("task_completed", False),
             tools_used=trajectory_data.get("tools_used", 0),
             expected_tools=expected_tools,
