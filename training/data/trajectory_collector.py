@@ -75,6 +75,20 @@ class EpisodeResult:
         self.task_id = task_id
         self.trajectory = trajectory
         self.total_reward = total_reward
+        
+        # Be robust to accidental dict/list for turns
+        if not isinstance(turns, int):
+            # Try common bad shape: {"turn": N}
+            if isinstance(turns, dict) and "turn" in turns:
+                try:
+                    turns = int(turns["turn"])
+                except Exception:
+                    turns = len(trajectory) if isinstance(trajectory, (list, tuple)) else 0
+            else:
+                try:
+                    turns = int(turns)
+                except Exception:
+                    turns = len(trajectory) if isinstance(trajectory, (list, tuple)) else 0
         self.turns = turns
         self.task_completed = task_completed
         self.tools_used = tools_used
@@ -730,8 +744,20 @@ class TrajectoryCollector:
         logger.debug(f"Creating EpisodeResult - turns value: {turns_value}, type: {type(turns_value)}")
         
         if not isinstance(turns_value, int):
-            logger.error(f"🚨 CRITICAL: turns should be int, got {type(turns_value)}: {turns_value}")
-            turns_value = len(trajectory_data.get("trajectory", []))  # Fallback to trajectory length
+            logger.warning(f"⚠️ turns should be int, got {type(turns_value)}: {turns_value}")
+            # Try common bad shape: {"turn": N} or the last trajectory entry
+            if isinstance(turns_value, dict):
+                if "turn" in turns_value:
+                    try:
+                        turns_value = int(turns_value["turn"])
+                        logger.info(f"   Extracted turn count from dict: {turns_value}")
+                    except Exception:
+                        turns_value = len(trajectory_data.get("trajectory", []))
+                else:
+                    # Might be the last trajectory entry itself
+                    turns_value = len(trajectory_data.get("trajectory", []))
+            else:
+                turns_value = len(trajectory_data.get("trajectory", []))  # Fallback to trajectory length
         
         return EpisodeResult(
             task_id=task_metadata.get("task_id", "unknown"),

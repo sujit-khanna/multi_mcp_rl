@@ -475,9 +475,10 @@ class VLLMQwenPolicy:
                     outputs = self.training_model(input_ids=input_ids, use_cache=False)  # use_cache=False saves memory
                     logits = outputs.logits.float()  # Convert back to FP32 for stability
                 
-                # Verify gradients are flowing
-                if not any(p.requires_grad for p in self.training_model.parameters()):
-                    logger.error("🚨 NO PARAMETERS REQUIRE GRADIENTS!")
+                # Verify gradients are flowing (only for main policy, not reference)
+                # Check if this is the main policy by seeing if vLLM is enabled
+                if self.use_vllm and not any(p.requires_grad for p in self.training_model.parameters()):
+                    logger.error("🚨 NO PARAMETERS REQUIRE GRADIENTS IN MAIN POLICY!")
                     # Force enable gradients for LoRA parameters
                     for name, param in self.training_model.named_parameters():
                         if "lora_" in name:
@@ -739,12 +740,21 @@ class VLLMQwenPolicy:
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
         
-        # Load model
+        # Load model with BitsAndBytesConfig (no more deprecation warnings)
+        from transformers import BitsAndBytesConfig
+        
+        quant_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.float16,
+            bnb_4bit_use_double_quant=True,
+        )
+        
         self.training_model = AutoModelForCausalLM.from_pretrained(
             self.model_name,
             torch_dtype=torch.float16,
             device_map="auto",
-            load_in_4bit=True,
+            quantization_config=quant_config,
             trust_remote_code=True
         )
         
@@ -815,7 +825,8 @@ class VLLMQwenPolicy:
             temperature=temperature,
             top_p=0.9,
             repetition_penalty=1.05,  # Slight repetition penalty
-            stop=None,  # Let eos_token_id govern stopping to avoid premature termination
+            # Stop at structured boundaries to reduce rambling and stray content
+            stop=["</tool_call>", "</tool_response>", "<|im_end|>", "\n\n\n"],
             skip_special_tokens=False,  # Don't skip special tokens during generation
             logprobs=1  # Request logprobs for sampled tokens
         )
@@ -848,7 +859,8 @@ class VLLMQwenPolicy:
                     temperature=max(0.7, temperature),  # Higher temperature
                     top_p=max(0.9, 0.9),
                     repetition_penalty=1.1,  # Stronger repetition penalty
-                    stop=None,
+                    # Stop at structured boundaries
+                    stop=["</tool_call>", "</tool_response>", "<|im_end|>", "\n\n\n"],
                     skip_special_tokens=False,
                     logprobs=1
                 )
@@ -1034,6 +1046,155 @@ class VLLMQwenPolicy:
         """Set to evaluation mode"""
         self.training_model.eval()
         self.value_head.eval()
+    
+    def clone_for_reference(self):
+        """Create a lightweight, non-vLLM copy for reference policy.
+        
+        - Shares tokenizer
+        - New HF model (no quantization) loaded from the same pretrained id
+        - Loads current policy weights
+        - Disables grads and sets eval()
+        - Does NOT initialize vLLM (generation not needed for reference)
+        """
+        import copy
+        import torch.nn as nn
+        from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+        
+        logger.info("🔄 Creating reference policy clone (non-vLLM, non-quantized)...")
+        
+        ref = object.__new__(self.__class__)
+        # Copy simple attributes
+        ref.model_name = self.model_name
+        ref.tokenizer = self.tokenizer
+        ref.use_vllm = False
+        ref.vllm_engine = None
+        ref.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+        # Prefer bf16 if available; else fp16
+        torch_dtype = torch.bfloat16 if (torch.cuda.is_available() and torch.cuda.is_bf16_supported()) else torch.float16
+        
+        logger.info(f"📦 Loading fresh model from {ref.model_name} for reference...")
+        ref.training_model = AutoModelForCausalLM.from_pretrained(
+            ref.model_name,
+            torch_dtype=torch_dtype,
+            device_map="auto",
+            trust_remote_code=True,
+            # No quantization for reference policy
+        )
+        
+        # Create value head (if present)
+        if hasattr(self, "value_head") and self.value_head is not None:
+            logger.info("📦 Creating value head for reference...")
+            hidden_size = ref.training_model.config.hidden_size
+            # Match the original value head architecture (896 hidden units)
+            ref.value_head = nn.Sequential(
+                nn.Linear(hidden_size, hidden_size),  # 896 -> 896
+                nn.ReLU(),
+                nn.Linear(hidden_size, 1)  # 896 -> 1
+            ).to(device=ref.device, dtype=torch.float32)  # Move to correct device and keep fp32 for stability
+            
+            # Copy value head weights (ensure they're on the same device)
+            value_state = self.value_head.state_dict()
+            # Move state dict to reference device
+            value_state = {k: v.to(ref.device) if torch.is_tensor(v) else v for k, v in value_state.items()}
+            ref.value_head.load_state_dict(value_state)
+        else:
+            ref.value_head = None
+        
+        # Try to load main policy weights (filter out quantization and LoRA)
+        logger.info("📦 Copying base model weights to reference...")
+        try:
+            # Get state dict from current policy, filtering out LoRA and quantization
+            current_state = {}
+            for name, param in self.training_model.named_parameters():
+                # Skip LoRA layers and quantization artifacts
+                if "lora_" not in name and "bnb" not in name and "quant" not in name:
+                    # Try to map the parameter name
+                    clean_name = name.replace("base_model.model.", "")
+                    if clean_name in ref.training_model.state_dict():
+                        current_state[clean_name] = param.data
+            
+            # Load available weights (non-strict to handle missing keys)
+            if current_state:
+                ref.training_model.load_state_dict(current_state, strict=False)
+                logger.info(f"✅ Loaded {len(current_state)} base parameters into reference")
+        except Exception as e:
+            logger.warning(f"⚠️ Reference policy: could not copy all weights - {e}")
+            logger.info("   Using pretrained weights as reference baseline")
+        
+        # Freeze all parameters
+        for p in ref.training_model.parameters():
+            p.requires_grad_(False)
+        ref.training_model.eval()
+        
+        if ref.value_head is not None:
+            for p in ref.value_head.parameters():
+                p.requires_grad_(False)
+            ref.value_head.eval()
+        
+        # Surface compatibility attributes
+        ref.last_sample_logprobs = None
+        ref.last_sample_token_ids = None
+        
+        # Add model property for compatibility
+        class RefCombinedModel:
+            def __init__(self, training_model, value_head):
+                self.training_model = training_model
+                self.value_head = value_head
+                
+            def parameters(self):
+                # Return all parameters from both training_model and value_head
+                for p in self.training_model.parameters():
+                    yield p
+                if self.value_head is not None:
+                    for p in self.value_head.parameters():
+                        yield p
+            
+            def named_parameters(self):
+                # Return all named parameters from both training_model and value_head
+                for name, param in self.training_model.named_parameters():
+                    yield f"training_model.{name}", param
+                if self.value_head is not None:
+                    for name, param in self.value_head.named_parameters():
+                        yield f"value_head.{name}", param
+            
+            def load_state_dict(self, state_dict, strict=True):
+                # Handle state dict loading for the combined model
+                missing_keys = []
+                unexpected_keys = []
+                if hasattr(self.training_model, 'load_state_dict'):
+                    m, u = self.training_model.load_state_dict(state_dict, strict=False)
+                    missing_keys.extend(m)
+                    unexpected_keys.extend(u)
+                return missing_keys, unexpected_keys
+                    
+        ref.model = RefCombinedModel(ref.training_model, ref.value_head)
+        
+        # Copy the compute_log_probs method and bind it to reference
+        import types
+        
+        # Copy the original compute_log_probs method
+        original_compute_log_probs = self.__class__.compute_log_probs
+        
+        # Bind it to the reference policy instance
+        ref.compute_log_probs = types.MethodType(original_compute_log_probs, ref)
+        
+        # Add compute_values method if not present  
+        if not hasattr(ref, 'compute_values'):
+            ref.compute_values = lambda states: torch.zeros(len(states) if isinstance(states, list) else states.shape[0], device=ref.device)
+        
+        # Add parameters() method to reference policy
+        def ref_parameters():
+            """Return all parameters from reference policy"""
+            for p in ref.training_model.parameters():
+                yield p
+            if ref.value_head is not None:
+                for p in ref.value_head.parameters():
+                    yield p
+        ref.parameters = ref_parameters
+        
+        logger.info("✅ Reference policy created (frozen, non-vLLM, non-quantized)")
+        return ref
 
 
 def update_reference_policy_ema(reference_policy, current_policy, alpha=0.05):
@@ -1157,19 +1318,22 @@ async def main():
     training_config = config.get("training", {})
     model_config = config.get("model", {})
     
-    # Initialize reference policy (use main policy temporarily to avoid issues)  
-    logger.info("🔄 Using main policy as reference (KL divergence will be 0 initially)...")
+    # Initialize reference policy using the new clone method
+    logger.info("🔄 Creating separate reference policy for proper KL divergence...")
     
-    # TEMPORARY SOLUTION: Use main policy as reference to avoid quantization issues
-    # This means KL divergence will be 0, but training can proceed
-    # TODO: Implement proper reference policy after training is stable
-    reference_policy = policy
-    
-    logger.info("✅ Reference policy set (temporary - using main policy)")
+    # Create a frozen, non-quantized reference policy
+    if hasattr(policy, 'clone_for_reference'):
+        reference_policy = policy.clone_for_reference()
+        logger.info("✅ Reference policy created (separate, frozen, non-quantized)")
+    else:
+        # Fallback to using same policy if clone method not available
+        logger.warning("⚠️ clone_for_reference not available, using main policy as reference")
+        reference_policy = policy
+        logger.info("⚠️ KL divergence will be 0 (using same policy as reference)")
     
     # Setup GRPO config
     grpo_config = {
-        "learning_rate": float(training_config.get("learning_rate", 5e-6)),
+        "learning_rate": float(config.get("learning_rate", 5e-5)),  # Use config's learning_rate (5e-5) not training sub-config
         "batch_size": training_config.get("batch_size", 1),
         "kl_coeff": float(training_config.get("kl_coeff", 0.01)),
         "gamma": float(training_config.get("gamma", 0.99)),

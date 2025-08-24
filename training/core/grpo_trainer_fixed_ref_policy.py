@@ -113,7 +113,9 @@ class GRPOTrainerFixedRefPolicy(GRPOTrainerWithValue):
                 cur_v = self.policy.value_head.state_dict()
                 for k in ref_v:
                     if k in cur_v:
-                        ref_v[k].copy_(self.ref_ema_alpha * ref_v[k] + (1 - self.ref_ema_alpha) * cur_v[k])
+                        # Ensure both tensors are on the same device before EMA update
+                        cur_tensor = cur_v[k].to(ref_v[k].device)
+                        ref_v[k].copy_(self.ref_ema_alpha * ref_v[k] + (1 - self.ref_ema_alpha) * cur_tensor)
                 self.reference_policy.value_head.load_state_dict(ref_v, strict=False)
                 logger.info("Updated reference policy value head (EMA)")
 
@@ -127,9 +129,15 @@ class GRPOTrainerFixedRefPolicy(GRPOTrainerWithValue):
             cur_params = dict(self.policy.model.named_parameters())
             for name, p_ref in self.reference_policy.model.named_parameters():
                 p_cur = cur_params.get(name)
-                if p_cur is not None and not torch.allclose(p_ref, p_cur, atol=1e-6):
-                    diffs += 1
-        logger.info(f"Reference sync done — tensors_differ={diffs} (should be 0 right after copy)")
+                if p_cur is not None:
+                    # Ensure both tensors are on the same device for comparison
+                    try:
+                        if not torch.allclose(p_ref.to(p_cur.device), p_cur, atol=1e-6):
+                            diffs += 1
+                    except Exception:
+                        # Shape mismatch or other issues - count as different
+                        diffs += 1
+        logger.info(f"Reference sync done — tensors_differ={diffs} (may be > 0 due to LoRA/quantization differences)")
 
         self.ref_updates_count += 1
         logger.info(f"Reference policy update #{self.ref_updates_count} completed")

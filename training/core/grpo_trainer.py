@@ -58,6 +58,9 @@ class Trajectory:
         dones: List[bool],
         log_probs: Optional[torch.Tensor] = None,
         values: Optional[torch.Tensor] = None,
+        old_log_probs: Optional[torch.Tensor] = None,
+        advantages: Optional[torch.Tensor] = None,
+        returns: Optional[torch.Tensor] = None,
     ):
         self.task_id = task_id
         self.states = states
@@ -66,7 +69,9 @@ class Trajectory:
         self.dones = dones
         self.log_probs = log_probs
         self.values = values
-        self.advantages: Optional[torch.Tensor] = None
+        self.old_log_probs = old_log_probs
+        self.advantages = advantages
+        self.returns = returns
         
         # Computed properties
         self.total_reward = sum(rewards)
@@ -78,7 +83,20 @@ class Trajectory:
     
     def to_device(self, device: torch.device) -> 'Trajectory':
         """Move tensor attributes to specified device."""
-        new_traj = copy.deepcopy(self)
+        # Don't use deepcopy - it fails with LoRA/quantized models
+        # Create a new trajectory with the same data
+        new_traj = Trajectory(
+            task_id=self.task_id,
+            states=self.states,  # Usually strings, no device move needed
+            actions=self.actions,  # Usually strings, no device move needed
+            rewards=self.rewards,
+            dones=self.dones,
+            values=getattr(self, 'values', None),
+            old_log_probs=getattr(self, 'old_log_probs', None),
+            advantages=getattr(self, 'advantages', None),
+            returns=getattr(self, 'returns', None),
+            log_probs=getattr(self, 'log_probs', None)
+        )
         
         # Handle log_probs - might be a list or tensor
         if self.log_probs is not None:
