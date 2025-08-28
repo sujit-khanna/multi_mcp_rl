@@ -34,6 +34,7 @@ import torch
 import yaml
 import numpy as np
 from tqdm import tqdm
+import re
 
 # Add parent directories to path
 sys.path.append(str(Path(__file__).parent.parent))
@@ -209,14 +210,13 @@ class VLLMQwenPolicy:
                 states = input_ids
                 values = []
                 for state in states:
-                    # Convert state to string if needed
-                    if isinstance(state, dict) or isinstance(state, list):
-                        state_str = str(state)
+                    # Build chat-formatted prompt consistently (include assistant start)
+                    if isinstance(state, list):
+                        state_prompt = self._build_prompt(state, add_generation_prompt=True)
                     else:
-                        state_str = str(state)
-                    
-                    # Tokenize the state
-                    tokens = self.tokenizer(state_str, return_tensors="pt", truncation=True, max_length=1500, padding=True)
+                        state_prompt = self._build_prompt([{"role": "user", "content": str(state)}], add_generation_prompt=True)
+                    # Tokenize the state prompt
+                    tokens = self.tokenizer(state_prompt, return_tensors="pt", truncation=True, max_length=1500, padding=True)
                     tokens = {k: v.to(self.device) for k, v in tokens.items()}
                     
                     # Get value for this state (PRESERVE GRADIENTS FOR TRAINING)
@@ -301,50 +301,44 @@ class VLLMQwenPolicy:
         if not isinstance(states, list):
             states = [states]
             
-        # Convert conversation states to text prompts with tool call guidance
+        # Convert conversation states to text prompts via unified builder
         formatted_inputs = []
+        # Build dynamic tool list
+        tool_names = self._get_tool_names()
+        tool_list_str = ", ".join(tool_names) if tool_names else "fmp_get_quote, polygon_get_aggs, execute_python, send_slack_message"
+        tool_system = {
+            "role": "system",
+            "content": (
+                "You are a tool-using assistant. When external information or actions are needed, "
+                "respond using exactly one <tool_call>{\"name\": \"tool_name\", \"arguments\": { ... }}</tool_call> block. "
+                f"Available tools: {tool_list_str}."
+            ),
+        }
+
         for state in states:
             if isinstance(state, list):
-                # FIXED: Use Qwen's proper chat template format with conversation truncation
-                conversation_text = "<|im_start|>system\nYou are a tool assistant. Generate tool calls in this format: <tool_call>{\"name\": \"tool_name\", \"arguments\": {\"key\": \"value\"}}</tool_call>\n\nAvailable tools: fmp_get_quote, polygon_get_aggs, execute_python, tavily_search, send_slack_message<|im_end|>\n"
-                
-                # CRITICAL FIX: Truncate conversation to stay within token limits
-                # Keep system message + last N messages to avoid exceeding max_model_len
-                max_history_messages = 8  # Adjust based on typical message length
-                
+                max_history_messages = 6
                 if len(state) > max_history_messages:
-                    # Keep first message (usually user task) + recent messages
-                    truncated_state = [state[0]] + state[-(max_history_messages-1):]
-                    logger.debug(f"Truncated conversation from {len(state)} to {len(truncated_state)} messages")
+                    truncated_state = [state[0]] + state[-(max_history_messages - 1):]
                 else:
                     truncated_state = state
-                
-                for msg in truncated_state:
-                    role = msg.get("role", "user")
-                    content = msg.get("content", "")
-                    # Also truncate individual messages if they're too long
-                    if len(content) > 1000:
-                        content = content[:1000] + "... (truncated)"
-                    conversation_text += f"<|im_start|>{role}\n{content}<|im_end|>\n"
-                    
-                conversation_text += "<|im_start|>assistant\n"
-                formatted_inputs.append(conversation_text)
+                # Prepend system tool guidance
+                msgs = [tool_system] + truncated_state
+                formatted_inputs.append(self._build_prompt(msgs, add_generation_prompt=True))
             else:
-                # FIXED: Use Qwen's proper chat template for single state
-                guided_prompt = "<|im_start|>system\nYou are a tool assistant. Generate tool calls in this format: <tool_call>{\"name\": \"tool_name\", \"arguments\": {\"key\": \"value\"}}</tool_call><|im_end|>\n"
-                guided_prompt += f"<|im_start|>user\n{str(state)}<|im_end|>\n"
-                guided_prompt += "<|im_start|>assistant\n"
-                formatted_inputs.append(guided_prompt)
+                msgs = [tool_system, {"role": "user", "content": str(state)}]
+                formatted_inputs.append(self._build_prompt(msgs, add_generation_prompt=True))
         
         # Use vLLM or HuggingFace for generation with better parameters
         responses = self.generate(
             formatted_inputs, 
-            max_tokens=max_new_tokens or 128,  # Focused on tool calls 
+            max_tokens=max_new_tokens or 512,  # Increased to prevent truncation of tool calls and responses
             temperature=temperature or 0.7  # Higher temperature for diverse generation
         )
         
         # Handle empty responses and encourage tool calls
         processed_responses = []
+        last_forced_mask = []
         for i, response in enumerate(responses):
             if not response or len(response.strip()) == 0:
                 # CRITICAL: Log this as an error since it breaks training
@@ -364,16 +358,42 @@ class VLLMQwenPolicy:
                     fallback = '<tool_call>{"name": "fmp_get_quote", "arguments": {"symbol": "AAPL"}}</tool_call>'
                     
                 processed_responses.append(fallback)
+                last_forced_mask.append(True)
             else:
                 # Check if response contains a tool call
                 if '<tool_call>' in response and '</tool_call>' in response:
                     processed_responses.append(response)
+                    last_forced_mask.append(False)
                     logger.info(f"✅ Natural tool call generated: {response[:100]}...")
                 else:
-                    # Response is natural language - allow it but log
-                    processed_responses.append(response)
-                    logger.info(f"📝 Natural language response: {response[:50]}...")
+                    # Try a strict resample requiring a tool_call-only output
+                    try:
+                        strict_prompt = formatted_inputs[i] + "Respond ONLY with a single <tool_call>{...}</tool_call> JSON block."
+                        strict_resp = self.generate([strict_prompt], max_tokens=(max_new_tokens or 512), temperature=0.2)[0]
+                    except Exception as e:
+                        logger.warning(f"Strict resample failed: {e}")
+                        strict_resp = ""
+                    if strict_resp and "<tool_call>" in strict_resp and "</tool_call>" in strict_resp:
+                        processed_responses.append(strict_resp)
+                        last_forced_mask.append(True)
+                        logger.info(f"🔁 Resampled tool call: {strict_resp[:100]}...")
+                    else:
+                        # Fall back to a contextual tool call to ensure environment interaction
+                        context = formatted_inputs[i].lower()
+                        if 'stock' in context or 'price' in context or 'spy' in context or 'aapl' in context:
+                            fallback = '<tool_call>{"name": "fmp_get_quote", "arguments": {"symbol": "AAPL"}}</tool_call>'
+                        elif 'search' in context or 'find' in context or 'news' in context:
+                            fallback = '<tool_call>{"name": "tavily_search", "arguments": {"query": "latest market news"}}</tool_call>'
+                        elif 'calculate' in context or 'python' in context or 'code' in context or 'analysis' in context:
+                            fallback = '<tool_call>{"name": "execute_python", "arguments": {"code": "print(2+2)"}}</tool_call>'
+                        else:
+                            fallback = '<tool_call>{"name": "tavily_search", "arguments": {"query": "S&P 500"}}</tool_call>'
+                        processed_responses.append(fallback)
+                        last_forced_mask.append(True)
+                        logger.info(f"🔧 Forced fallback tool call: {fallback}")
         
+        # Expose which outputs were forced
+        self.last_forced_mask = last_forced_mask
         return processed_responses
     
     def compute_log_probs(self, states, actions, **kwargs):
@@ -409,20 +429,13 @@ class VLLMQwenPolicy:
         batch_targets = []
         
         for state, action in zip(states, actions):
-            # Convert state to prompt
+            # Build prompt from messages using unified builder
             if isinstance(state, list):
-                conversation_text = ""
-                for msg in state:
-                    role = msg.get("role", "user")
-                    content = msg.get("content", "")
-                    conversation_text += f"{role}: {content}\n"
-                prompt = conversation_text + "assistant: "
+                prompt = self._build_prompt(state, add_generation_prompt=True)
             else:
-                prompt = str(state)
-            
+                prompt = self._build_prompt([{"role": "user", "content": str(state)}], add_generation_prompt=True)
             # Ensure action is a string and not empty
-            action_str = str(action) if action else " "  # Use space if empty
-            
+            action_str = str(action) if action else " "
             batch_prompts.append(prompt)
             batch_targets.append(action_str)
         
@@ -1046,7 +1059,98 @@ class VLLMQwenPolicy:
         """Set to evaluation mode"""
         self.training_model.eval()
         self.value_head.eval()
-    
+
+    def _build_prompt(self, messages: List[Dict[str, str]], add_generation_prompt: bool = True) -> str:
+        """Build a chat-formatted prompt with token-aware truncation and content sanitization."""
+        def sanitize_content(c: str) -> str:
+            if not isinstance(c, str):
+                c = str(c)
+            c = re.sub(r"<think>.*?</think>", "", c, flags=re.DOTALL)
+            c = re.sub(r"<tool_response>.*?</tool_response>", "<tool_response>[omitted]</tool_response>", c, flags=re.DOTALL)
+            if len(c) > 512:
+                c = c[:512] + "..."
+            return c
+
+        msgs = []
+        for m in messages:
+            msgs.append({
+                "role": str(m.get("role", "user")),
+                "content": sanitize_content(m.get("content", ""))
+            })
+
+        def render(_msgs: List[Dict[str, str]]) -> str:
+            try:
+                if hasattr(self.tokenizer, "apply_chat_template"):
+                    return self.tokenizer.apply_chat_template(_msgs, tokenize=False, add_generation_prompt=add_generation_prompt)
+            except Exception as e:
+                logger.debug(f"apply_chat_template failed, using fallback: {e}")
+            text = ""
+            for m in _msgs:
+                text += f"<|im_start|>{m['role']}\n{m['content']}<|im_end|>\n"
+            if add_generation_prompt:
+                text += "<|im_start|>assistant\n"
+            return text
+
+        prompt = render(msgs)
+
+        # Token-aware truncation for vLLM
+        try:
+            budget = int(os.getenv("VLLM_MAX_MODEL_LEN", "4096")) if self.use_vllm else 4096
+            margin = 256
+            max_total = max(512, budget - margin)
+            attempts = 0
+            while attempts < 6:
+                toks = self.tokenizer(prompt, return_tensors="pt", truncation=False)
+                if toks["input_ids"].shape[1] <= max_total:
+                    break
+                # drop oldest non-system
+                drop_idx = None
+                for i, m in enumerate(msgs):
+                    if i == 0 and m.get("role") == "system":
+                        continue
+                    drop_idx = i
+                    break
+                if drop_idx is None or len(msgs) <= 2:
+                    # hard truncate string
+                    enc = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=max_total)
+                    prompt = self.tokenizer.decode(enc["input_ids"][0], skip_special_tokens=False)
+                    break
+                msgs.pop(drop_idx)
+                prompt = render(msgs)
+                attempts += 1
+        except Exception as e:
+            logger.debug(f"Token-aware truncation skipped: {e}")
+
+        return prompt
+
+    def _get_tool_names(self) -> List[str]:
+        if hasattr(self, "_cached_tool_names") and self._cached_tool_names:
+            return self._cached_tool_names
+        names = []
+        try:
+            env_path = Path(__file__).parent.parent.parent / "environments"
+            if str(env_path) not in sys.path:
+                sys.path.append(str(env_path))
+            from simple_shared_manager import SimpleSharedMCPToolManager
+            mgr = SimpleSharedMCPToolManager()
+            if not getattr(mgr, "_initialized", False):
+                import threading
+                def init_mgr():
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        loop.run_until_complete(mgr.initialize())
+                    finally:
+                        loop.close()
+                t = threading.Thread(target=init_mgr)
+                t.start(); t.join(timeout=10)
+            names = list(getattr(mgr, "available_tools", {}).keys())
+        except Exception as e:
+            logger.debug(f"Dynamic tool discovery unavailable: {e}")
+        if not names:
+            names = ["fmp_get_quote", "polygon_get_aggs", "execute_python", "send_slack_message"]
+        self._cached_tool_names = names
+        return names
     def clone_for_reference(self):
         """Create a lightweight, non-vLLM copy for reference policy.
         
@@ -1310,6 +1414,33 @@ async def main():
     
     # Setup environment factory function
     tool_manager = SimpleSharedManager()
+    # Ensure tool manager is initialized and log discovered tools for visibility
+    try:
+        if not getattr(tool_manager, "_initialized", False):
+            import threading
+            def _init_mgr():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    loop.run_until_complete(tool_manager.initialize())
+                finally:
+                    loop.close()
+            t = threading.Thread(target=_init_mgr)
+            t.start(); t.join(timeout=15)
+        discovered = list(getattr(tool_manager, "available_tools", {}).keys())
+        logger.info(f"🧰 Discovered tools via MCP manager: {discovered if discovered else '[]'}")
+        # Warn about common missing API keys
+        missing = []
+        if "tavily_search" not in discovered:
+            if not os.getenv("TAVILY_API_KEY"):
+                missing.append("TAVILY_API_KEY")
+        if "fmp_get_quote" not in discovered:
+            if not os.getenv("FMP_API_KEY"):
+                missing.append("FMP_API_KEY")
+        if missing:
+            logger.warning(f"⚠️  Missing or inactive API keys for tools: {missing}. Tools may be unavailable.")
+    except Exception as e:
+        logger.warning(f"Tool discovery logging failed: {e}")
     
     def env_factory(task_data):
         return MCPToolEnvironment(task_data=task_data)
@@ -1340,7 +1471,9 @@ async def main():
         "lam": float(training_config.get("lam", 0.95)),
         "clip_ratio": float(training_config.get("clip_ratio", 0.2)),
         "value_loss_coeff": float(training_config.get("value_loss_coeff", 0.5)),
-        "entropy_coeff": float(training_config.get("entropy_coeff", 0.01))
+        "entropy_coeff": float(training_config.get("entropy_coeff", 0.01)),
+        "ref_policy_update_frequency": int(training_config.get("ref_policy_update_frequency", 100)),
+        "group_size": int(training_config.get("group_size", 2)),
     }
     
     # Initialize GRPO trainer (using working trainer)
@@ -1370,10 +1503,18 @@ async def main():
         
         # Collect episodes using real environment with vLLM speed
         start_time = time.time()
-        # FIXED: Use random sampling from ALL training data instead of just first 4 samples
         import random
-        batch_size = training_config.get("batch_size", 4)  # Use training config batch_size
-        training_batch = random.sample(training_data, min(batch_size, len(training_data)))
+        batch_size = training_config.get("batch_size", 4)
+        group_size = grpo_config.get("group_size", 2)
+        # Form GRPO groups: select a few tasks and collect multiple rollouts per task
+        num_tasks = max(1, batch_size // max(1, group_size))
+        base_tasks = random.sample(training_data, min(num_tasks, len(training_data)))
+        training_batch = []
+        for t in base_tasks:
+            for gi in range(group_size):
+                t_copy = copy.deepcopy(t)
+                t_copy.setdefault("extra_info", {})["resample_id"] = f"{epoch}-{gi}-{random.randint(0, 1_000_000)}"
+                training_batch.append(t_copy)
         
         logger.info(f"📊 Using {len(training_batch)} samples from {len(training_data)} total training examples")
         logger.debug(f"Task IDs: {[task.get('task_metadata', {}).get('task_id', 'unknown') for task in training_batch]}")
@@ -1492,11 +1633,7 @@ async def main():
             logger.info(f"✅ Training step completed in {train_time:.2f}s")
             logger.info(f"📊 Metrics: {metrics}")
             
-            # TODO: Implement proper reference policy creation once training is stable
-            # For now, KL divergence will be 0 since reference_policy = policy
-            global_step = (epoch - 1) * training_config.get("epochs_per_update", 1) + 1
-            if global_step % 10 == 0:
-                logger.info(f"⚠️  Step {global_step}: KL divergence is 0 (using same policy as reference)")
+            # KL divergence handled inside trainer
         else:
             logger.warning("⚠️ No valid trajectories collected, skipping training step")
             

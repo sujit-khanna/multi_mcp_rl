@@ -101,6 +101,23 @@ elif [ -f "$ROOT_DIR/../.env" ]; then
     echo "Parent .env file loaded"
 fi
 
+# ================================================
+# MCP Server Health Check and Restart
+# ================================================
+echo ""
+echo "================================================"
+echo "MCP Server Health Check"
+echo "================================================"
+
+# Test MCP servers and restart if needed
+python "$ROOT_DIR/test_mcp_restart.py" || {
+    echo "⚠️  MCP server check failed, but continuing with training..."
+    echo "   Some tools may not be available during training"
+}
+
+echo "================================================"
+echo ""
+
 # WandB configuration - vLLM VERSION
 export WANDB_PROJECT="multi-mcp-rl-vllm"  # Different project for vLLM runs
 export WANDB_MODE="online"  # Set to "offline" to disable wandb
@@ -239,33 +256,46 @@ import pandas as pd
 import sys
 
 try:
+    import pandas as pd
     df = pd.read_csv('$OUTPUT_DIR/gpu_usage.csv', header=None)
-    df.columns = ['timestamp', 'gpu_name', 'gpu_util', 'mem_util', 'mem_used', 'mem_free', 'temperature', 'power']
+    # Handle potential extra columns gracefully
+    cols = ['timestamp', 'gpu_name', 'gpu_util', 'mem_util', 'mem_used', 'mem_free', 'temperature', 'power']
+    df = df.iloc[:, :len(cols)]
+    df.columns = cols[:df.shape[1]]
     
-    # Clean percentage values
-    df['gpu_util'] = df['gpu_util'].str.rstrip(' %').astype(float)
-    df['mem_util'] = df['mem_util'].str.rstrip(' %').astype(float)
+    # Clean percentage values (cast to str first)
+    if 'gpu_util' in df:
+        df['gpu_util'] = df['gpu_util'].astype(str).str.rstrip(' %').astype(float)
+    if 'mem_util' in df:
+        df['mem_util'] = df['mem_util'].astype(str).str.rstrip(' %').astype(float)
     
-    print(f'Average GPU Utilization: {df[\"gpu_util\"].mean():.1f}%')
-    print(f'Peak GPU Utilization: {df[\"gpu_util\"].max():.1f}%')
-    print(f'Average Memory Utilization: {df[\"mem_util\"].mean():.1f}%')
-    print(f'Peak Memory Utilization: {df[\"mem_util\"].max():.1f}%')
+    if 'gpu_util' in df:
+        print(f'Average GPU Utilization: {df["gpu_util"].mean():.1f}%')
+        print(f'Peak GPU Utilization: {df["gpu_util"].max():.1f}%')
+    if 'mem_util' in df:
+        print(f'Average Memory Utilization: {df["mem_util"].mean():.1f}%')
+        print(f'Peak Memory Utilization: {df["mem_util"].max():.1f}%')
     
     # Parse memory values
-    mem_used = df['mem_used'].str.rstrip(' MiB').astype(float) / 1024
-    print(f'Average Memory Used: {mem_used.mean():.1f} GB')
-    print(f'Peak Memory Used: {mem_used.max():.1f} GB')
+    if 'mem_used' in df:
+        mem_used = df['mem_used'].astype(str).str.rstrip(' MiB').astype(float) / 1024
+        print(f'Average Memory Used: {mem_used.mean():.1f} GB')
+        print(f'Peak Memory Used: {mem_used.max():.1f} GB')
     
     # Temperature
-    temp = df['temperature'].str.rstrip(' C').astype(float)
-    print(f'Average GPU Temperature: {temp.mean():.1f}°C')
-    print(f'Peak GPU Temperature: {temp.max():.1f}°C')
+    if 'temperature' in df:
+        temp = df['temperature'].astype(str).str.rstrip(' C').astype(float)
+        print(f'Average GPU Temperature: {temp.mean():.1f}°C')
+        print(f'Peak GPU Temperature: {temp.max():.1f}°C')
     
     # Power
-    if not df['power'].str.contains('N/A').all():
-        power = df['power'].str.rstrip(' W').replace('[Not Supported]', '0').astype(float)
-        print(f'Average Power Draw: {power.mean():.1f} W')
-        print(f'Peak Power Draw: {power.max():.1f} W')
+    if 'power' in df:
+        power_str = df['power'].astype(str)
+        # If every value is N/A or Not Supported, skip stats
+        if not power_str.str.contains('N/A').all():
+            power = power_str.str.replace('[Not Supported]', '0', regex=False).str.rstrip(' W').astype(float)
+            print(f'Average Power Draw: {power.mean():.1f} W')
+            print(f'Peak Power Draw: {power.max():.1f} W')
         
     # vLLM specific metrics
     if df['gpu_util'].mean() > 70:

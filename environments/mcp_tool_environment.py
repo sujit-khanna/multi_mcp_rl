@@ -209,11 +209,37 @@ class MCPToolEnvironment(BaseTextEnv):
         return complexity_limits.get(self.complexity, 6)
     
     async def initialize_tools(self):
-        """Initialize MCP tool manager asynchronously"""
-        from .simple_shared_manager import SimpleSharedMCPToolManager
-        self.tool_manager = SimpleSharedMCPToolManager()
-        await self.tool_manager.initialize()
-        self.available_tools = list(self.tool_manager.available_tools.keys())
+        """Initialize MCP tool manager asynchronously.
+        
+        If a tool_manager is already provided (e.g., by a shared manager),
+        reuse it instead of creating a new one.
+        """
+        # Only import if we need to create a new manager
+        if self.tool_manager is None:
+            try:
+                # Try relative import first (when imported as environments.mcp_tool_environment)
+                from .simple_shared_manager import SimpleSharedMCPToolManager
+            except ImportError:
+                # Fall back to absolute import (when imported directly with sys.path manipulation)
+                try:
+                    from simple_shared_manager import SimpleSharedMCPToolManager
+                except ImportError as e:
+                    logger.error(f"Failed to import SimpleSharedMCPToolManager: {e}")
+                    # Create a dummy manager to avoid crashes
+                    self.available_tools = []
+                    return
+            
+            self.tool_manager = SimpleSharedMCPToolManager()
+        
+        # Initialize and populate available tools (even if manager was injected)
+        if hasattr(self.tool_manager, "initialize") and asyncio.iscoroutinefunction(self.tool_manager.initialize):
+            await self.tool_manager.initialize()
+        elif hasattr(self.tool_manager, "initialize"):
+            # Synchronous initialize fallback
+            self.tool_manager.initialize()
+        
+        # CRITICAL FIX: Always set available_tools from the manager, even if import failed earlier
+        self.available_tools = list(getattr(self.tool_manager, "available_tools", {}).keys())
         logger.info(f"Initialized {len(self.available_tools)} tools")
     
     def step(self, action: str) -> BaseTextEnvStepOutput:
@@ -311,8 +337,11 @@ class MCPToolEnvironment(BaseTextEnv):
                 "content": observation_text
             })
             
+            # Also include a flattened 'observation' string for downstream components
+            observation_text_str = observation_text if isinstance(observation_text, str) else str(observation_text)
             return {
                 "observations": skyrl_observations,
+                "observation": observation_text_str,
                 "reward": self.reward_components.total,
                 "done": done,
                 "metadata": metadata,
@@ -395,6 +424,20 @@ class MCPToolEnvironment(BaseTextEnv):
                 "text": "message"
             }
         }
+        
+        # Normalize tool name aliases to match available tools
+        name_aliases = {
+            # Common drift/typos → canonical names in mcp_tools/limited
+            "tavily_filter": "tavily_search",
+            "tavily_find": "tavily_search",
+            "send_message": "send_slack_message",
+            "slack_send": "send_slack_message",
+            # Polygon variations
+            "polygon_get_ticker_details": "polygon_get_aggs",
+        }
+        if tool_name in name_aliases:
+            tool_call["name"] = name_aliases[tool_name]
+            tool_name = tool_call["name"]
         
         if tool_name in arg_aliases:
             aliases = arg_aliases[tool_name]

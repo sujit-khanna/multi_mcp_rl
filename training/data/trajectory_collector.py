@@ -385,6 +385,13 @@ class TrajectoryCollector:
             if self.shared_tool_manager is not None:
                 env.tool_manager = self.shared_tool_manager
             
+            # Ensure tools are initialized so environment can execute tool calls
+            if hasattr(env, "initialize_tools"):
+                try:
+                    await env.initialize_tools()
+                except Exception as e:
+                    logger.warning(f"Tool initialization failed: {e}")
+            
             return env
             
         except Exception as e:
@@ -435,6 +442,9 @@ class TrajectoryCollector:
                 turn += 1
                 logger.info(f"🔄 Episode {task_id} - Turn {turn}/{self.max_episode_length}")
                 
+                # Snapshot pre-action state for training
+                state_snapshot = copy.deepcopy(conversation_history)
+
                 # Generate action using policy
                 logger.info(f"⚡ Generating action for turn {turn}...")
                 action = await self._generate_action(conversation_history)
@@ -511,6 +521,7 @@ class TrajectoryCollector:
                 # Create turn data
                 turn_data = {
                     "turn": turn,
+                    "state": state_snapshot,
                     "action": action,
                     "observation": observation,
                     "reward": reward,
@@ -705,6 +716,19 @@ class TrajectoryCollector:
                         "metadata": {}
                     }
             
+            # Normalize 'observations' list to single 'observation' string if needed
+            if "observation" not in step_result and "observations" in step_result:
+                obs = step_result.get("observations")
+                if isinstance(obs, list) and obs:
+                    # Use the last message content as observation text
+                    last_msg = obs[-1]
+                    if isinstance(last_msg, dict):
+                        step_result["observation"] = str(last_msg.get("content", ""))
+                    else:
+                        step_result["observation"] = str(last_msg)
+                else:
+                    step_result["observation"] = str(obs)
+            
             return step_result
             
         except Exception as e:
@@ -739,25 +763,16 @@ class TrajectoryCollector:
             trajectory_data.get("total_reward", 0.0) > 0.0
         )
         
-        # Debug: Check the type of turns before creating EpisodeResult
+        # Coerce turns to int without noisy warnings
         turns_value = trajectory_data.get("turns", 0)
-        logger.debug(f"Creating EpisodeResult - turns value: {turns_value}, type: {type(turns_value)}")
-        
-        if not isinstance(turns_value, int):
-            logger.warning(f"⚠️ turns should be int, got {type(turns_value)}: {turns_value}")
-            # Try common bad shape: {"turn": N} or the last trajectory entry
-            if isinstance(turns_value, dict):
-                if "turn" in turns_value:
-                    try:
-                        turns_value = int(turns_value["turn"])
-                        logger.info(f"   Extracted turn count from dict: {turns_value}")
-                    except Exception:
-                        turns_value = len(trajectory_data.get("trajectory", []))
+        try:
+            if not isinstance(turns_value, int):
+                if isinstance(turns_value, dict) and "turn" in turns_value:
+                    turns_value = int(turns_value["turn"])
                 else:
-                    # Might be the last trajectory entry itself
-                    turns_value = len(trajectory_data.get("trajectory", []))
-            else:
-                turns_value = len(trajectory_data.get("trajectory", []))  # Fallback to trajectory length
+                    turns_value = int(turns_value) if isinstance(turns_value, (str, float)) else len(trajectory_data.get("trajectory", []))
+        except Exception:
+            turns_value = len(trajectory_data.get("trajectory", []))
         
         return EpisodeResult(
             task_id=task_metadata.get("task_id", "unknown"),
@@ -897,10 +912,11 @@ def convert_episode_results_to_grpo_trajectories(
         dones = []
         
         for turn_data in episode.trajectory:
-            # Reconstruct conversation state before this action
-            # This is a simplified version - in practice you'd need the full conversation history
-            state = [{"role": "user", "content": "Task prompt"}]  # Placeholder
-            
+            # Use recorded pre-action state if available
+            state = turn_data.get("state")
+            if state is None:
+                # Fallback to conversation_history snapshot or initial prompt
+                state = episode.initial_prompt or [{"role": "user", "content": "Task"}]
             states.append(state)
             actions.append(turn_data["action"])
             rewards.append(turn_data["reward"])
