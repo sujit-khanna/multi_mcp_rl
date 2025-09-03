@@ -104,8 +104,15 @@ class VLLMQwenPolicy:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
         # Add required attributes for GRPO trainer compatibility
-        self.use_lora = False  # We're using full model, not LoRA
+        self.use_lora = True  # Using LoRA for efficient training
         self.model = None  # Will be set after initialization
+        
+        # LoRA synchronization with vLLM
+        self.lora_update_frequency = 5  # Update vLLM every 5 training steps
+        self.lora_update_counter = 0
+        self.current_lora_id = 0
+        self.lora_save_path = "/dev/shm/vllm_lora_weights"  # RAM disk for speed
+        self.lora_request = None  # Will be set when LoRA is loaded
         
         # Initialize vLLM if available
         if VLLM_AVAILABLE and os.getenv("ENABLE_VLLM", "false").lower() == "true":
@@ -575,6 +582,9 @@ class VLLMQwenPolicy:
             max_model_len = int(os.getenv("VLLM_MAX_MODEL_LEN", "8192"))  # Increased for longer conversations
             logger.info(f"🔧 Setting vLLM max_model_len to {max_model_len}")
             
+            # Import LoRA request class
+            from vllm.lora.request import LoRARequest
+            
             self.vllm_engine = LLM(
                 model=self.model_name,
                 max_model_len=max_model_len,
@@ -583,7 +593,13 @@ class VLLMQwenPolicy:
                 trust_remote_code=True,
                 dtype="auto",
                 quantization=None,  # Let vLLM handle optimization
+                enable_lora=True,  # Enable LoRA adapter support
+                max_lora_rank=16,  # Match our LoRA config
+                max_loras=2,  # Allow swapping between adapters
             )
+            
+            # Store LoRARequest class for later use
+            self.LoRARequest = LoRARequest
             
             # Initialize HuggingFace components for training (value head, LoRA)
             self._init_hf_training_components()
@@ -854,7 +870,15 @@ class VLLMQwenPolicy:
             
         # Generate with vLLM - with empty generation handling
         try:
-            outputs = self.vllm_engine.generate(prompts, sampling_params)
+            # Use LoRA adapter if available
+            if self.lora_request is not None:
+                outputs = self.vllm_engine.generate(
+                    prompts, 
+                    sampling_params,
+                    lora_request=self.lora_request
+                )
+            else:
+                outputs = self.vllm_engine.generate(prompts, sampling_params)
             
             # Check for empty generations and resample once if needed
             empty_outputs = []
@@ -877,7 +901,15 @@ class VLLMQwenPolicy:
                     skip_special_tokens=False,
                     logprobs=1
                 )
-                resample_outputs = self.vllm_engine.generate(resample_prompts, resample_params)
+                # Use LoRA adapter for resampling too
+                if self.lora_request is not None:
+                    resample_outputs = self.vllm_engine.generate(
+                        resample_prompts, 
+                        resample_params,
+                        lora_request=self.lora_request
+                    )
+                else:
+                    resample_outputs = self.vllm_engine.generate(resample_prompts, resample_params)
                 
                 # Replace empty outputs with resampled ones
                 for j, empty_idx in enumerate(empty_outputs):
@@ -1049,6 +1081,60 @@ class VLLMQwenPolicy:
             logger.info(f"🔧 After forcing: {len(trainable_params)} trainable parameters")
         
         return iter(trainable_params)  # Return iterator like nn.Module.parameters()
+    
+    def save_lora_weights_for_vllm(self):
+        """Save current LoRA weights to RAM disk for vLLM to load"""
+        import os
+        import shutil
+        
+        try:
+            # Create directory in RAM disk (faster than SSD)
+            os.makedirs(self.lora_save_path, exist_ok=True)
+            
+            # Save only the LoRA adapter weights (not the full model)
+            if hasattr(self, 'training_model') and self.training_model is not None:
+                # Save using PEFT's save_pretrained which handles LoRA properly
+                self.training_model.save_pretrained(
+                    self.lora_save_path,
+                    save_embedding_layers=False,  # Don't save embeddings
+                    state_dict=None,  # Use current state
+                )
+                
+                # Increment LoRA ID for cache invalidation
+                self.current_lora_id += 1
+                
+                logger.debug(f"💾 Saved LoRA weights to {self.lora_save_path} (ID: {self.current_lora_id})")
+                return True
+                
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to save LoRA weights: {e}")
+            return False
+    
+    def maybe_update_vllm_lora(self, force=False):
+        """Conditionally update vLLM's LoRA weights based on update frequency"""
+        if not self.use_vllm or not hasattr(self, 'LoRARequest'):
+            return False
+            
+        self.lora_update_counter += 1
+        
+        # Only update at specified frequency or when forced
+        if not force and self.lora_update_counter < self.lora_update_frequency:
+            return False
+            
+        # Save current LoRA weights
+        if self.save_lora_weights_for_vllm():
+            # Create LoRA request for vLLM
+            self.lora_request = self.LoRARequest(
+                lora_name=f"training_iter_{self.current_lora_id}",
+                lora_int_id=self.current_lora_id % 1000000,  # Keep ID reasonable
+                lora_local_path=self.lora_save_path
+            )
+            
+            self.lora_update_counter = 0
+            logger.info(f"✅ Updated vLLM LoRA adapter (ID: {self.current_lora_id})")
+            return True
+        
+        return False
     
     def train(self):
         """Set to training mode"""
@@ -1494,6 +1580,11 @@ async def main():
         shared_tool_manager=tool_manager
     )
     
+    # Initial LoRA save for vLLM to have weights to load
+    if hasattr(policy, 'maybe_update_vllm_lora'):
+        logger.info("🔧 Performing initial LoRA save for vLLM...")
+        policy.maybe_update_vllm_lora(force=True)
+    
     logger.info("🎯 Starting training loop...")
     
     # Training loop
@@ -1610,6 +1701,12 @@ async def main():
             metrics = trainer.train_step(trajectories)
             train_time = time.time() - start_time
             
+            # Update vLLM's LoRA weights after training step
+            if hasattr(policy, 'maybe_update_vllm_lora'):
+                lora_updated = policy.maybe_update_vllm_lora()
+                if lora_updated:
+                    logger.info(f"🔄 vLLM LoRA weights updated after epoch {epoch}")
+            
             # Log comprehensive training metrics
             combined_metrics = {
                 "epoch": epoch,
@@ -1662,6 +1759,12 @@ async def main():
                     'total_reward': sum(total_rewards) / len(total_rewards) if 'total_rewards' in locals() and total_rewards else 0.0
                 }, checkpoint_path)
                 logger.info(f"💾 Saved checkpoint: {checkpoint_path}")
+                
+                # Force LoRA update after checkpoint to ensure consistency
+                if hasattr(policy, 'maybe_update_vllm_lora'):
+                    policy.maybe_update_vllm_lora(force=True)
+                    logger.info(f"🔄 vLLM LoRA weights updated after checkpoint")
+                    
             except Exception as e:
                 logger.warning(f"⚠️ Checkpoint save failed: {e}")
     
