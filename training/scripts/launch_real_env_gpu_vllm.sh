@@ -182,10 +182,12 @@ echo "================================================"
 # Set ulimit for better performance
 ulimit -n 65536  # Increase file descriptor limit
 
-# Launch training with existing script but vLLM environment variables
+# Launch training with our corrected vLLM LoRA implementation
 echo ""
 echo "Starting training with vLLM optimizations..."
 echo "================================================"
+echo "🚀 Using corrected vLLM training script with LoRA sync every 1 step"
+echo "📊 Expected: Detailed LoRA debug logs after each training step"
 
 # Verify dataset exists before starting
 if [ ! -f "data/inputs/train.json" ] && [ ! -f "data/processed/train.json" ]; then
@@ -212,6 +214,16 @@ echo "   📈 GPU utilization: 11% → 70-90%"
 echo "   💾 Memory efficiency: OOM-prone → Stable"
 
 # Use the vLLM-INTEGRATED training script for 10x speedup
+# Set debug logging for vLLM initialization
+export VLLM_LOGGING_LEVEL="INFO"
+export VLLM_DEBUG="1"
+
+echo "🔧 Debug settings:"
+echo "   ENABLE_VLLM: $ENABLE_VLLM"
+echo "   VLLM_GPU_MEMORY_UTILIZATION: $VLLM_GPU_MEMORY_UTILIZATION"  
+echo "   VLLM_MAX_MODEL_LEN: $VLLM_MAX_MODEL_LEN"
+echo "   GPU Memory: $(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits | head -1) MB free"
+
 python training/scripts/train_qwen3_grpo_real_env_vllm.py \
     --config training/configs/training_config_qwen3_0.6b.yaml \
     --device cuda \

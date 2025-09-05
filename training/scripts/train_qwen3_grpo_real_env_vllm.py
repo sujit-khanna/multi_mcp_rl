@@ -108,7 +108,7 @@ class VLLMQwenPolicy:
         self.model = None  # Will be set after initialization
         
         # LoRA synchronization with vLLM
-        self.lora_update_frequency = 5  # Update vLLM every 5 training steps
+        self.lora_update_frequency = 1  # Update vLLM every 1 training step (for debugging)
         self.lora_update_counter = 0
         self.current_lora_id = 0
         self.lora_save_path = "/dev/shm/vllm_lora_weights"  # RAM disk for speed
@@ -872,12 +872,14 @@ class VLLMQwenPolicy:
         try:
             # Use LoRA adapter if available
             if self.lora_request is not None:
+                logger.debug(f"🎯 Using LoRA adapter for generation: {self.lora_request.lora_name}")
                 outputs = self.vllm_engine.generate(
                     prompts, 
                     sampling_params,
                     lora_request=self.lora_request
                 )
             else:
+                logger.debug(f"⚠️ No LoRA adapter available, using base model")
                 outputs = self.vllm_engine.generate(prompts, sampling_params)
             
             # Check for empty generations and resample once if needed
@@ -903,12 +905,14 @@ class VLLMQwenPolicy:
                 )
                 # Use LoRA adapter for resampling too
                 if self.lora_request is not None:
+                    logger.debug(f"🔄 Using LoRA adapter for resampling: {self.lora_request.lora_name}")
                     resample_outputs = self.vllm_engine.generate(
                         resample_prompts, 
                         resample_params,
                         lora_request=self.lora_request
                     )
                 else:
+                    logger.debug(f"⚠️ No LoRA adapter for resampling, using base model")
                     resample_outputs = self.vllm_engine.generate(resample_prompts, resample_params)
                 
                 # Replace empty outputs with resampled ones
@@ -1103,7 +1107,7 @@ class VLLMQwenPolicy:
                 # Increment LoRA ID for cache invalidation
                 self.current_lora_id += 1
                 
-                logger.debug(f"💾 Saved LoRA weights to {self.lora_save_path} (ID: {self.current_lora_id})")
+                logger.info(f"💾 Saved LoRA weights to {self.lora_save_path} (ID: {self.current_lora_id})")
                 return True
                 
         except Exception as e:
@@ -1112,29 +1116,48 @@ class VLLMQwenPolicy:
     
     def maybe_update_vllm_lora(self, force=False):
         """Conditionally update vLLM's LoRA weights based on update frequency"""
+        logger.info(f"🔄 maybe_update_vllm_lora called (force={force})")
+        logger.info(f"   Current counter: {self.lora_update_counter}")
+        logger.info(f"   Update frequency: {self.lora_update_frequency}")
+        logger.info(f"   use_vllm: {self.use_vllm}")
+        logger.info(f"   has LoRARequest: {hasattr(self, 'LoRARequest')}")
+        
         if not self.use_vllm or not hasattr(self, 'LoRARequest'):
+            logger.warning("⚠️  Cannot update LoRA: vLLM not enabled or LoRARequest not available")
             return False
             
         self.lora_update_counter += 1
+        logger.info(f"   Counter incremented to: {self.lora_update_counter}")
         
         # Only update at specified frequency or when forced
         if not force and self.lora_update_counter < self.lora_update_frequency:
+            logger.info(f"   Skipping update: counter {self.lora_update_counter} < frequency {self.lora_update_frequency}")
             return False
             
+        logger.info(f"🚀 Proceeding with LoRA update (force={force})")
+        
         # Save current LoRA weights
+        logger.info("💾 Saving LoRA weights for vLLM...")
         if self.save_lora_weights_for_vllm():
+            logger.info("💾 LoRA weights saved successfully, creating LoRARequest...")
             # Create LoRA request for vLLM
             self.lora_request = self.LoRARequest(
                 lora_name=f"training_iter_{self.current_lora_id}",
                 lora_int_id=self.current_lora_id % 1000000,  # Keep ID reasonable
                 lora_local_path=self.lora_save_path
             )
+            logger.info(f"📦 Created LoRARequest:")
+            logger.info(f"   lora_name: {self.lora_request.lora_name}")
+            logger.info(f"   lora_int_id: {self.lora_request.lora_int_id}")
+            logger.info(f"   lora_local_path: {self.lora_request.lora_local_path}")
             
             self.lora_update_counter = 0
+            logger.info(f"   Reset counter to: {self.lora_update_counter}")
             logger.info(f"✅ Updated vLLM LoRA adapter (ID: {self.current_lora_id})")
             return True
-        
-        return False
+        else:
+            logger.error("❌ Failed to save LoRA weights for vLLM")
+            return False
     
     def train(self):
         """Set to training mode"""
@@ -1702,10 +1725,20 @@ async def main():
             train_time = time.time() - start_time
             
             # Update vLLM's LoRA weights after training step
+            logger.info(f"🔍 Checking for LoRA update after training step...")
             if hasattr(policy, 'maybe_update_vllm_lora'):
-                lora_updated = policy.maybe_update_vllm_lora()
+                logger.info(f"✅ Policy has maybe_update_vllm_lora method")
+                
+                # FORCE update every step for debugging (remove frequency limit)
+                logger.info(f"🚀 FORCING LoRA update for debugging purposes...")
+                lora_updated = policy.maybe_update_vllm_lora(force=True)
+                
                 if lora_updated:
-                    logger.info(f"🔄 vLLM LoRA weights updated after epoch {epoch}")
+                    logger.info(f"🎉 vLLM LoRA weights successfully updated after epoch {epoch}")
+                else:
+                    logger.error(f"❌ vLLM LoRA weights update FAILED after epoch {epoch}")
+            else:
+                logger.error(f"❌ Policy does NOT have maybe_update_vllm_lora method!")
             
             # Log comprehensive training metrics
             combined_metrics = {
