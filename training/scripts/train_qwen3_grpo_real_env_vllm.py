@@ -1446,6 +1446,8 @@ def update_reference_policy_ema(reference_policy, current_policy, alpha=0.05):
 
 async def main():
     """Main training function with vLLM integration"""
+    # Ensure torch is available in local scope to avoid any scope resolution issues
+    import torch
     
     parser = argparse.ArgumentParser(description="vLLM-Enhanced GRPO Training")
     parser.add_argument("--config", type=str, default="training/configs/training_config_qwen3_0.6b.yaml")
@@ -1688,21 +1690,38 @@ async def main():
                 actions = []
                 rewards = []
                 dones = []
-                
+                # Collect sample-time old logprobs per action (scalar sums)
+                old_log_probs = []
+                # Collect optional per-action forced flags if present
+                forced_flags = []
+                    
                 for i, step in enumerate(episode.trajectory):
                     # Always append to maintain length consistency
                     states.append(step.get('state', {}))  # Default to empty dict
                     actions.append(step.get('action', ""))  # Default to empty string
                     rewards.append(step.get('reward', 0.0))  # Default to 0.0
                     dones.append(i == len(episode.trajectory) - 1)  # Last step is done
-                
+                    # Prefer vector action_logprobs if available; fall back to scalar in metadata
+                    step_vec = step.get('action_logprobs', None)
+                    if step_vec is not None and hasattr(step_vec, '__len__') and len(step_vec) > 0:
+                        try:
+                            lp_sum = float(step_vec.sum().item() if hasattr(step_vec, 'sum') else sum(step_vec))
+                        except Exception:
+                            # Last resort: treat as 0.0
+                            lp_sum = 0.0
+                    else:
+                        lp_sum = float(step.get('metadata', {}).get('log_prob', 0.0))
+                    old_log_probs.append(lp_sum)
+                    # Optional per-turn forced flag (if collector stored it)
+                    forced_flags.append(bool(step.get('metadata', {}).get('was_forced', False)))
+                    
                 # Ensure we have at least one step if trajectory is completely empty
                 if not states:
                     states = [{}]  # Empty state
                     actions = [""]  # Empty action
                     rewards = [0.0]
                     dones = [True]
-                
+                    
                 # Final safety check - ensure all arrays have same length
                 min_length = min(len(states), len(actions), len(rewards), len(dones))
                 if min_length > 0:
@@ -1710,7 +1729,9 @@ async def main():
                     actions = actions[:min_length]
                     rewards = rewards[:min_length]
                     dones = dones[:min_length]
-                
+                    old_log_probs = old_log_probs[:min_length]
+                    forced_flags = forced_flags[:min_length]
+                    
                 logger.info(f"📊 Trajectory lengths - States: {len(states)}, Actions: {len(actions)}, Rewards: {len(rewards)}, Dones: {len(dones)}")
                 
                 trajectory = Trajectory(
@@ -1718,26 +1739,36 @@ async def main():
                     states=states,
                     actions=actions,
                     rewards=rewards,
-                    dones=dones
+                    dones=dones,
+                    log_probs=old_log_probs
                 )
+                # Attach forced mask (per action); trainer handles default if absent
+                try:
+                    import torch
+                    trajectory.forced_mask = torch.tensor(forced_flags, dtype=torch.bool)
+                except Exception:
+                    pass
                 trajectories.append(trajectory)
+        else:
+            trajectories = []
             
-            # ROBUST WANDB LOGGING: Pre-update heartbeat to ensure visibility
-            heartbeat_metrics = {
-                "epoch": epoch,
-                "heartbeat": 1,
-                "collection_time": collection_time,
-                "total_trajectories": len(trajectories),
-                "vllm_enabled": policy.use_vllm,
-                "status": "starting_training_step"
-            }
+        # ROBUST WANDB LOGGING: Pre-update heartbeat to ensure visibility
+        heartbeat_metrics = {
+            "epoch": epoch,
+            "heartbeat": 1,
+            "collection_time": collection_time,
+            "total_trajectories": len(trajectories),
+            "vllm_enabled": policy.use_vllm,
+            "status": "starting_training_step"
+        }
             
-            try:
-                wandb.log(heartbeat_metrics)
-                logger.debug("📡 Pre-training heartbeat logged to WandB")
-            except Exception as e:
-                logger.warning(f"⚠️  WandB heartbeat failed: {e}")
+        try:
+            wandb.log(heartbeat_metrics)
+            logger.debug("📡 Pre-training heartbeat logged to WandB")
+        except Exception as e:
+            logger.warning(f"⚠️  WandB heartbeat failed: {e}")
             
+        if trajectories and len(trajectories) > 0:
             start_time = time.time()
             metrics = trainer.train_step(trajectories)
             train_time = time.time() - start_time

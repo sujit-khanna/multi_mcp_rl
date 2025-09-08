@@ -524,11 +524,15 @@ class TrajectoryCollector:
                 # Create turn data
                 # CRITICAL: Extract and store per-token logprobs from the last action
                 action_logprobs = None
+                was_forced_flag = False
                 if hasattr(self, '_current_episode_logprobs') and self._current_episode_logprobs:
                     # Get the logprobs for this specific turn
                     if len(self._current_episode_logprobs) > turn - 1:
                         action_logprobs = self._current_episode_logprobs[turn - 1]
                         logger.debug(f"Retrieved {len(action_logprobs) if action_logprobs is not None else 0} logprobs for turn {turn}")
+                if hasattr(self, '_current_episode_forced_mask') and self._current_episode_forced_mask:
+                    if len(self._current_episode_forced_mask) > turn - 1:
+                        was_forced_flag = bool(self._current_episode_forced_mask[turn - 1])
                 
                 turn_data = {
                     "turn": turn,
@@ -541,6 +545,7 @@ class TrajectoryCollector:
                     "metadata": {
                         **step_metadata,
                         "log_prob": log_prob,
+                        "was_forced": was_forced_flag,
                         "conversation_length": len(conversation_history),
                     }
                 }

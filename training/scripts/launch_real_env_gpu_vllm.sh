@@ -276,32 +276,33 @@ try:
     df.columns = cols[:df.shape[1]]
     
     # Clean percentage values (cast to str first)
-    if 'gpu_util' in df:
+    cols_set = set(df.columns)
+    if 'gpu_util' in cols_set:
         df['gpu_util'] = df['gpu_util'].astype(str).str.rstrip(' %').astype(float)
-    if 'mem_util' in df:
+    if 'mem_util' in cols_set:
         df['mem_util'] = df['mem_util'].astype(str).str.rstrip(' %').astype(float)
     
-    if 'gpu_util' in df:
+    if 'gpu_util' in cols_set:
         print(f'Average GPU Utilization: {df["gpu_util"].mean():.1f}%')
         print(f'Peak GPU Utilization: {df["gpu_util"].max():.1f}%')
-    if 'mem_util' in df:
+    if 'mem_util' in cols_set:
         print(f'Average Memory Utilization: {df["mem_util"].mean():.1f}%')
         print(f'Peak Memory Utilization: {df["mem_util"].max():.1f}%')
     
     # Parse memory values
-    if 'mem_used' in df:
+    if 'mem_used' in cols_set:
         mem_used = df['mem_used'].astype(str).str.rstrip(' MiB').astype(float) / 1024
         print(f'Average Memory Used: {mem_used.mean():.1f} GB')
         print(f'Peak Memory Used: {mem_used.max():.1f} GB')
     
     # Temperature
-    if 'temperature' in df:
+    if 'temperature' in cols_set:
         temp = df['temperature'].astype(str).str.rstrip(' C').astype(float)
         print(f'Average GPU Temperature: {temp.mean():.1f}°C')
         print(f'Peak GPU Temperature: {temp.max():.1f}°C')
     
     # Power
-    if 'power' in df:
+    if 'power' in cols_set:
         power_str = df['power'].astype(str)
         # If every value is N/A or Not Supported, skip stats
         if not power_str.str.contains('N/A').all():
@@ -310,9 +311,9 @@ try:
             print(f'Peak Power Draw: {power.max():.1f} W')
         
     # vLLM specific metrics
-    if df['gpu_util'].mean() > 70:
+    if 'gpu_util' in cols_set and df['gpu_util'].mean() > 70:
         print('\\n✅ Excellent GPU utilization! vLLM integration working well.')
-    elif df['gpu_util'].mean() > 40:
+    elif 'gpu_util' in cols_set and df['gpu_util'].mean() > 40:
         print('\\n✅ Good GPU utilization with vLLM acceleration.')
     else:
         print('\\n⚠️  Low GPU utilization - vLLM may not be active.')

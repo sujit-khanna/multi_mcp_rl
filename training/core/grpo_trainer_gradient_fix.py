@@ -119,10 +119,11 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
                         computed = self.policy.compute_log_probs(traj.states, traj.actions)
                         traj.log_probs = [p for p in computed]
                 else:
-                    # Fallback: compute with current model (NOT ideal - makes ratio ~1.0)
-                    logger.warning(f"⚠️ No sample-time log_probs for trajectory {traj_idx}! Computing with current model (PPO ratio will be ~1.0)")
-                    computed = self.policy.compute_log_probs(traj.states, traj.actions)
-                    traj.log_probs = [p for p in computed]
+                    # Hard fail: we require sample-time old logprobs for correct PPO ratios
+                    raise RuntimeError(
+                        f"Missing sample-time log_probs for trajectory {traj_idx}. "
+                        f"Trajectory collection must provide old logprobs (sum per action)."
+                    )
                 
                 # Convert to tensors - handle both per-action tensors and scalars
                 for lp in traj.log_probs:
@@ -189,9 +190,8 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
                                 param.add_(torch.randn_like(param) * 1e-6)
                     logger.info(f"✅ Added tiny perturbation to {min(10, len(trainable_params))} parameters to break PPO degeneracy")
                 
-                # Compute CURRENT policy logprobs with gradients enabled (this is NEW)
-                with torch.enable_grad():
-                    current_log_probs = self.policy.compute_log_probs(all_states, all_actions)
+                # Compute CURRENT policy logprobs with gradients enabled (sum over action tokens)
+                current_log_probs = self._compute_new_logprobs_sum_per_action(all_states, all_actions)
                 
                 # old_log_probs is already set from stored sample-time values above (line 141)
             else:
@@ -508,6 +508,61 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
             logger.warning(f"High KL divergence detected: {kl_divergence.item():.4f}")
         
         return metrics
+
+    def _compute_new_logprobs_sum_per_action(self, states, actions):
+        """
+        Compute per-action log probability sums under the current training model with gradients.
+
+        For each (state, action):
+          - Build the prompt text using policy._build_prompt(state, add_generation_prompt=True)
+          - Tokenize prompt and action with the HF tokenizer bound to training_model
+          - Forward the concatenated input through training_model
+          - Gather logprobs for the action tokens and sum them
+
+        Returns:
+          Tensor of shape [num_actions] with requires_grad=True
+        """
+        import torch
+        self.policy.training_model.train()
+        tokenizer = self.policy.tokenizer
+        device = self.device
+
+        logprob_sums = []
+        for state, action in zip(states, actions):
+            # Build prompt
+            try:
+                prompt_text = self.policy._build_prompt(state, add_generation_prompt=True)
+            except Exception:
+                # Fallback: stringify state
+                prompt_text = str(state)
+
+            # Tokenize prompt and action (no special tokens to maintain alignment)
+            enc_prompt = tokenizer(prompt_text, add_special_tokens=False, return_tensors="pt")
+            enc_action = tokenizer(str(action), add_special_tokens=False, return_tensors="pt")
+            prompt_ids = enc_prompt["input_ids"][0].to(device)
+            action_ids = enc_action["input_ids"][0].to(device)
+
+            # Compose full input and attention mask
+            full_ids = torch.cat([prompt_ids, action_ids], dim=0).unsqueeze(0)  # [1, T]
+            attn = torch.ones_like(full_ids, dtype=torch.long)
+
+            with torch.set_grad_enabled(True):
+                outputs = self.policy.training_model(input_ids=full_ids, attention_mask=attn)
+                logits = outputs.logits  # [1, T, V]
+                logprobs = torch.log_softmax(logits, dim=-1)  # [1, T, V]
+
+                T_prompt = prompt_ids.shape[0]
+                T_action = action_ids.shape[0]
+                # Action tokens are predicted at positions [T_prompt-1 ... T_prompt+T_action-2]
+                start = max(0, T_prompt - 1)
+                end = start + T_action
+                lp_slice = logprobs[:, start:end, :]  # [1, T_action, V]
+                taken = action_ids.unsqueeze(0).unsqueeze(-1)  # [1, T_action, 1]
+                lp_taken = lp_slice.gather(-1, taken).squeeze(-1)  # [1, T_action]
+                total = lp_taken.sum(dim=1).squeeze(0)  # scalar tensor
+                logprob_sums.append(total)
+
+        return torch.stack(logprob_sums).to(device)
     
     def _optimization_step(self, loss: torch.Tensor) -> float:
         """
