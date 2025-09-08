@@ -401,7 +401,25 @@ class VLLMQwenPolicy:
         
         # Expose which outputs were forced
         self.last_forced_mask = last_forced_mask
-        return processed_responses
+        
+        # ENHANCED RETURN: Include per-token logprobs for PPO training
+        # Return structured data with both text and logprob information
+        enhanced_responses = []
+        for i, response_text in enumerate(processed_responses):
+            # Get the captured logprobs and token IDs from vLLM generation
+            token_logprobs = self.last_sample_logprobs[i] if i < len(self.last_sample_logprobs) else []
+            token_ids = self.last_sample_token_ids[i] if i < len(self.last_sample_token_ids) else []
+            logprob_sum = sum(token_logprobs) if token_logprobs else 0.0
+            
+            enhanced_responses.append({
+                "text": response_text,
+                "token_ids": torch.tensor(token_ids, dtype=torch.long) if token_ids else torch.empty(0, dtype=torch.long),
+                "token_logprobs": torch.tensor(token_logprobs, dtype=torch.float32) if token_logprobs else torch.empty(0, dtype=torch.float32),
+                "logprob_sum": float(logprob_sum),
+                "was_forced": last_forced_mask[i] if i < len(last_forced_mask) else False
+            })
+        
+        return enhanced_responses
     
     def compute_log_probs(self, states, actions, **kwargs):
         """Compute log probabilities for given state-action pairs - MEMORY OPTIMIZED"""
@@ -1144,12 +1162,12 @@ class VLLMQwenPolicy:
             self.lora_request = self.LoRARequest(
                 lora_name=f"training_iter_{self.current_lora_id}",
                 lora_int_id=self.current_lora_id % 1000000,  # Keep ID reasonable
-                lora_local_path=self.lora_save_path
+                lora_path=self.lora_save_path  # Fixed: lora_local_path → lora_path
             )
             logger.info(f"📦 Created LoRARequest:")
             logger.info(f"   lora_name: {self.lora_request.lora_name}")
             logger.info(f"   lora_int_id: {self.lora_request.lora_int_id}")
-            logger.info(f"   lora_local_path: {self.lora_request.lora_local_path}")
+            logger.info(f"   lora_path: {self.lora_request.lora_path}")
             
             self.lora_update_counter = 0
             logger.info(f"   Reset counter to: {self.lora_update_counter}")

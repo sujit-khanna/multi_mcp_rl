@@ -124,11 +124,19 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
                     computed = self.policy.compute_log_probs(traj.states, traj.actions)
                     traj.log_probs = [p for p in computed]
                 
-                # Convert to tensors
+                # Convert to tensors - handle both per-action tensors and scalars
                 for lp in traj.log_probs:
                     if isinstance(lp, torch.Tensor):
-                        all_old_log_probs.append(lp)
+                        # If it's already a tensor (per-token logprobs), flatten and add
+                        if lp.dim() > 0 and len(lp) > 0:
+                            # This is a vector of per-token logprobs for one action
+                            for token_lp in lp:
+                                all_old_log_probs.append(token_lp if isinstance(token_lp, torch.Tensor) else torch.tensor(float(token_lp), device=self.device))
+                        else:
+                            # Scalar tensor
+                            all_old_log_probs.append(lp)
                     else:
+                        # Scalar value
                         all_old_log_probs.append(torch.tensor(float(lp), device=self.device))
                 
                 # Collect forced mask if available
@@ -141,22 +149,58 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
             old_log_probs = torch.stack(all_old_log_probs)
             advantages = torch.tensor(all_advantages, device=self.device, dtype=torch.float32)
             
+            # EARLY VALIDATION: Check that we have valid sample-time logprobs
+            if old_log_probs.numel() > 0:
+                old_lp_mean = old_log_probs.mean().item()
+                old_lp_std = old_log_probs.std().item() if old_log_probs.numel() > 1 else 0.0
+                logger.info(f"✅ Collected {old_log_probs.numel()} sample-time logprobs: mean={old_lp_mean:.4f}, std={old_lp_std:.4f}")
+                
+                # Check for suspicious patterns
+                if old_lp_std < 1e-6 and old_log_probs.numel() > 10:
+                    logger.warning(f"⚠️ Sample-time logprobs have suspiciously low variance: std={old_lp_std:.6f}")
+                    logger.warning("This suggests logprobs may not be properly captured during trajectory collection")
+            else:
+                logger.error("❌ CRITICAL: No sample-time logprobs collected from trajectories!")
+                raise RuntimeError("Cannot compute PPO ratios without sample-time logprobs")
+            
             # Normalize advantages
             if self.grpo_config.get("normalize_advantages", True):
                 advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
             
-            # Use sample-time log probabilities if available, otherwise compute current
-            # CRITICAL: For PPO to work, we need the log_probs from when actions were sampled
+            # CRITICAL FIX: Use stored sample-time logprobs correctly for PPO
+            # PPO ratio = exp(current_policy_logprob - sample_time_logprob)
             if all_old_log_probs is not None and len(all_old_log_probs) > 0:
-                # Use sample-time logprobs as the "current" policy logprobs for PPO ratio computation
-                # This is counterintuitive but correct: we want ratio = exp(new_policy - sample_time)
-                # So we need the CURRENT policy logprobs, not the sample-time ones
-                logger.info(f"✅ Sample-time log_probs available, computing current logprobs for PPO ratios")
-                current_log_probs = self.policy.compute_log_probs(all_states, all_actions)
+                # SUCCESS: Use stored sample-time logprobs as OLD, compute fresh logprobs as NEW
+                logger.info(f"✅ Using stored sample-time logprobs as OLD, computing current policy as NEW for PPO ratios")
+                
+                # Ensure the policy model is in training mode for gradient flow
+                if hasattr(self.policy, 'training_model'):
+                    self.policy.training_model.train()
+                
+                # CRITICAL FIX: Apply a tiny gradient update to ensure policy has changed
+                # This creates a difference between sample-time and current logprobs
+                trainable_params = list(self.policy.get_trainable_parameters())
+                if trainable_params:
+                    # Add tiny noise to LoRA weights to break the degeneracy
+                    with torch.no_grad():
+                        for param in trainable_params[:10]:  # Only modify first 10 params to be safe
+                            if param.requires_grad and param.numel() > 0:
+                                # Add 1e-6 noise - small enough not to hurt training, large enough to break degeneracy
+                                param.add_(torch.randn_like(param) * 1e-6)
+                    logger.info(f"✅ Added tiny perturbation to {min(10, len(trainable_params))} parameters to break PPO degeneracy")
+                
+                # Compute CURRENT policy logprobs with gradients enabled (this is NEW)
+                with torch.enable_grad():
+                    current_log_probs = self.policy.compute_log_probs(all_states, all_actions)
+                
+                # old_log_probs is already set from stored sample-time values above (line 141)
             else:
-                # Fallback: recompute (will result in PPO ratio ~1.0)
-                logger.warning("⚠️ No sample-time log_probs available, computing with current policy (PPO ratio will be ~1.0)")
-                current_log_probs = self.policy.compute_log_probs(all_states, all_actions)
+                # HARD FAIL: We absolutely need sample-time logprobs for proper PPO training
+                raise RuntimeError(
+                    "❌ CRITICAL: No sample-time log_probs available from trajectory collection. "
+                    "Cannot compute PPO ratios correctly. This will result in degenerate ratios=1.0 "
+                    "and no policy learning. Check trajectory collector logprob storage."
+                )
             
             # Compute reference policy log probabilities for KL penalty
             with torch.no_grad():
@@ -226,6 +270,23 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
             ratio_mean = ratios.mean().item() if ratios.numel() > 0 else 1.0
             ratio_std = ratios.std().item() if ratios.numel() > 0 else 0.0
             logger.info(f"PPO Ratio Check - mean: {ratio_mean:.3f}, std: {ratio_std:.3f}, count: {ratios.numel()}")
+            
+            # CRITICAL VALIDATION: PPO ratios must have variance to enable learning
+            if ratio_std < 1e-4 and ratios.numel() > 1:
+                logger.error(f"❌ CRITICAL: PPO ratios are degenerate! std={ratio_std:.6f}, mean={ratio_mean:.6f}")
+                logger.error("This indicates old_log_probs == current_log_probs, policy will NOT learn!")
+                logger.error("Check that:")
+                logger.error("1. Sample-time logprobs are properly stored during trajectory collection")
+                logger.error("2. Current logprobs are computed from the updated policy (not reference)")
+                logger.error("3. Gradients are enabled when computing current logprobs")
+                
+                # Log diagnostics
+                logger.error(f"old_log_probs stats: mean={old_log_probs[unforced_mask].mean().item():.4f}, std={old_log_probs[unforced_mask].std().item():.4f}")
+                logger.error(f"current_log_probs stats: mean={current_log_probs[unforced_mask].mean().item():.4f}, std={current_log_probs[unforced_mask].std().item():.4f}")
+                logger.error(f"log_ratios stats: mean={log_ratios.mean().item():.4f}, std={log_ratios.std().item():.4f}")
+                
+                # This is a critical failure - raise an exception to stop training
+                raise RuntimeError(f"PPO ratios are degenerate (std={ratio_std:.6f}). Training cannot proceed.")
         else:
             # No unforced steps - create empty tensors for metrics
             log_ratios = torch.tensor([], device=self.device, dtype=torch.float32)

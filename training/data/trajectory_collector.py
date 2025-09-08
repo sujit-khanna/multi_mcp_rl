@@ -426,6 +426,9 @@ class TrajectoryCollector:
         logger.info(f"🎮 Starting episode run for task {task_id}")
         logger.info(f"   Max episode length: {self.max_episode_length}")
         
+        # CRITICAL: Reset logprob storage for new episode
+        self._reset_episode_logprobs()
+        
         trajectory = []
         total_reward = 0.0
         turn = 0
@@ -519,6 +522,14 @@ class TrajectoryCollector:
                         # This section has been removed to prevent incorrect PPO ratio computation
                 
                 # Create turn data
+                # CRITICAL: Extract and store per-token logprobs from the last action
+                action_logprobs = None
+                if hasattr(self, '_current_episode_logprobs') and self._current_episode_logprobs:
+                    # Get the logprobs for this specific turn
+                    if len(self._current_episode_logprobs) > turn - 1:
+                        action_logprobs = self._current_episode_logprobs[turn - 1]
+                        logger.debug(f"Retrieved {len(action_logprobs) if action_logprobs is not None else 0} logprobs for turn {turn}")
+                
                 turn_data = {
                     "turn": turn,
                     "state": state_snapshot,
@@ -526,6 +537,7 @@ class TrajectoryCollector:
                     "observation": observation,
                     "reward": reward,
                     "done": done,
+                    "action_logprobs": action_logprobs,  # Store per-token logprobs
                     "metadata": {
                         **step_metadata,
                         "log_prob": log_prob,
@@ -634,7 +646,27 @@ class TrajectoryCollector:
                 return "ERROR: Policy generation timed out"
             
             if actions and len(actions) > 0:
-                return actions[0]
+                # ENHANCED: Handle new structured response format from policy
+                action_data = actions[0]  # First (and only) response
+                
+                if isinstance(action_data, dict):
+                    # NEW FORMAT: Structured data with logprobs
+                    action_text = action_data.get("text", "")
+                    token_logprobs = action_data.get("token_logprobs", torch.empty(0))
+                    logprob_sum = action_data.get("logprob_sum", 0.0)
+                    was_forced = action_data.get("was_forced", False)
+                    
+                    # Store the logprob data for the trainer (this is the key fix!)
+                    self._store_action_logprobs(token_logprobs, logprob_sum, was_forced)
+                    
+                    logger.info(f"✅ Enhanced action with logprobs: sum={logprob_sum:.4f}, "
+                               f"tokens={len(token_logprobs)}, forced={was_forced}")
+                    
+                    return action_text
+                else:
+                    # BACKWARD COMPATIBILITY: Old string format
+                    logger.warning("⚠️ Policy returned old string format - no logprobs available")
+                    return str(action_data)
             else:
                 logger.warning("Policy returned empty action, using fallback")
                 return "I need to think about this task."
@@ -642,6 +674,26 @@ class TrajectoryCollector:
         except Exception as e:
             logger.error(f"Error generating action: {e}")
             return f"Error generating action: {str(e)}"
+    
+    def _store_action_logprobs(self, token_logprobs: torch.Tensor, logprob_sum: float, was_forced: bool):
+        """Store logprob data for current action to be used by the trainer."""
+        # Initialize storage if needed
+        if not hasattr(self, '_current_episode_logprobs'):
+            self._current_episode_logprobs = []
+        if not hasattr(self, '_current_episode_forced_mask'):
+            self._current_episode_forced_mask = []
+        
+        # Store the per-token logprobs and forced flag
+        self._current_episode_logprobs.append(token_logprobs.clone() if len(token_logprobs) > 0 else torch.empty(0))
+        self._current_episode_forced_mask.append(was_forced)
+        
+        # Log for debugging
+        logger.debug(f"📦 Stored logprobs: {len(token_logprobs)} tokens, sum={logprob_sum:.4f}, forced={was_forced}")
+    
+    def _reset_episode_logprobs(self):
+        """Reset logprob storage for new episode."""
+        self._current_episode_logprobs = []
+        self._current_episode_forced_mask = []
     
     def _is_repetitive_generation(self, text: str) -> bool:
         """Detect if the generated text contains excessive repetition."""
@@ -923,13 +975,42 @@ def convert_episode_results_to_grpo_trajectories(
             dones.append(turn_data["done"])
         
         if states and actions:
+            # CRITICAL FIX: Extract logprobs from turn data instead of relying on instance variables
+            action_logprobs_list = []
+            forced_mask_list = []
+            
+            for turn_data in episode.trajectory:
+                # Get per-token logprobs from turn data
+                turn_logprobs = turn_data.get('action_logprobs', None)
+                if turn_logprobs is not None and len(turn_logprobs) > 0:
+                    action_logprobs_list.append(turn_logprobs)
+                    # Check if this action was forced (from metadata or other sources)
+                    was_forced = turn_data.get('metadata', {}).get('was_forced', False)
+                    forced_mask_list.append(was_forced)
+                    
+            # Now create the combined logprobs tensor
+            if action_logprobs_list and any(len(lp) > 0 for lp in action_logprobs_list):
+                # Keep logprobs as a list per action for proper alignment
+                all_logprobs = action_logprobs_list  # List of tensors, one per action
+                logger.info(f"✅ Trajectory has {len(action_logprobs_list)} actions with logprobs")
+            else:
+                all_logprobs = None
+                logger.warning("⚠️ No logprobs available for this trajectory - PPO ratios will be degenerate!")
+            
+            # Create trajectory with logprobs and forced mask
             trajectory = Trajectory(
                 task_id=episode.task_id,
                 states=states,
                 actions=actions,
                 rewards=rewards,
                 dones=dones,
+                log_probs=all_logprobs,  # This is the key fix!
             )
+            
+            # Store forced mask on trajectory if available
+            if episode_forced_mask:
+                trajectory.forced_mask = torch.tensor(episode_forced_mask, dtype=torch.bool)
+            
             grpo_trajectories.append(trajectory)
     
     return grpo_trajectories
