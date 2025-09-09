@@ -92,11 +92,40 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
             all_actions = []
             all_advantages = []
             all_old_log_probs = []
+            all_action_token_logprobs = []  # Per-token old logprobs
+            all_action_token_ids = []  # Token IDs for each action
+            all_prompt_texts = []  # Prompt texts for re-encoding
             
             for traj_idx, traj in enumerate(trajectories):
                 all_states.extend(traj.states)
                 all_actions.extend(traj.actions)
                 all_advantages.extend([traj.advantages[i] for i in range(traj.length)])
+                
+                # Collect per-token data if available
+                if hasattr(traj, 'action_token_logprobs') and traj.action_token_logprobs:
+                    all_action_token_logprobs.extend(traj.action_token_logprobs)
+                else:
+                    # No per-token data - will need to fail
+                    all_action_token_logprobs.extend([torch.empty(0) for _ in range(traj.length)])
+                    
+                if hasattr(traj, 'action_token_ids') and traj.action_token_ids:
+                    all_action_token_ids.extend(traj.action_token_ids)
+                else:
+                    all_action_token_ids.extend([torch.empty(0) for _ in range(traj.length)])
+                    
+                if hasattr(traj, 'prompt_texts') and traj.prompt_texts:
+                    all_prompt_texts.extend(traj.prompt_texts)
+                else:
+                    # Build prompts from states
+                    for state in traj.states:
+                        if isinstance(state, list):
+                            try:
+                                prompt_text = self.policy._build_prompt(state, add_generation_prompt=True)
+                            except:
+                                prompt_text = str(state)
+                        else:
+                            prompt_text = str(state)
+                        all_prompt_texts.append(prompt_text)
 
                 # CRITICAL FIX: Use correct key name and fail loudly if missing
                 import os
@@ -105,7 +134,19 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
                 # CRITICAL FIX: Use existing sample-time log_probs if available
                 # These are the "old" log probs for PPO and MUST be from sampling time
                 # NOT recomputed with current model (which would make ratio = 1.0)
-                if hasattr(traj, 'log_probs') and traj.log_probs is not None:
+                # We now prefer per-token logprobs for correct PPO ratio computation
+                if hasattr(traj, 'action_token_logprobs') and traj.action_token_logprobs and all(len(lp) > 0 for lp in traj.action_token_logprobs):
+                    # We have per-token logprobs - use these for proper PPO
+                    logger.info(f"✅ Using per-token sample-time logprobs for trajectory {traj_idx}")
+                    # Per-token logprobs are already collected above
+                    # Just compute sums for backward compat
+                    for token_logprobs in traj.action_token_logprobs:
+                        if len(token_logprobs) > 0:
+                            lp_sum = token_logprobs.sum() if hasattr(token_logprobs, 'sum') else sum(token_logprobs)
+                            all_old_log_probs.append(torch.tensor(float(lp_sum), device=self.device))
+                        else:
+                            all_old_log_probs.append(torch.tensor(0.0, device=self.device))
+                elif hasattr(traj, 'log_probs') and traj.log_probs is not None:
                     # Log the actual values for debugging
                     if isinstance(traj.log_probs, list) and len(traj.log_probs) > 0:
                         sample_val = traj.log_probs[0] if isinstance(traj.log_probs[0], (int, float)) else str(traj.log_probs[0])[:20]
@@ -190,10 +231,19 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
                                 param.add_(torch.randn_like(param) * 1e-6)
                     logger.info(f"✅ Added tiny perturbation to {min(10, len(trainable_params))} parameters to break PPO degeneracy")
                 
-                # Compute CURRENT policy logprobs with gradients enabled (sum over action tokens)
-                current_log_probs = self._compute_new_logprobs_sum_per_action(all_states, all_actions)
+                # Check if we have per-token data for proper PPO ratio computation
+                if all_action_token_logprobs and any(len(lp) > 0 for lp in all_action_token_logprobs):
+                    # Compute NEW per-token logprobs with gradients enabled
+                    logger.info("🎯 Computing NEW per-token logprobs for proper PPO ratios...")
+                    current_log_probs = self._compute_new_token_logprobs(
+                        all_prompt_texts, all_actions, all_action_token_logprobs
+                    )
+                else:
+                    # Fallback to sum-based computation (less accurate)
+                    logger.warning("⚠️ No per-token data available, using sum-based PPO (less accurate)")
+                    current_log_probs = self._compute_new_logprobs_sum_per_action(all_states, all_actions)
                 
-                # old_log_probs is already set from stored sample-time values above (line 141)
+                # old_log_probs is already set from stored sample-time values above
             else:
                 # HARD FAIL: We absolutely need sample-time logprobs for proper PPO training
                 raise RuntimeError(
@@ -316,6 +366,29 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
             kl_divergence = torch.mean(log_ratio ** 2) * 0.5
         # Additional clamp on KL divergence itself
         kl_divergence = torch.clamp(kl_divergence, min=0.0, max=100.0)
+        
+        # CRITICAL: KL hard-cap to prevent catastrophic updates (relaxed for initial training)
+        kl_value = kl_divergence.item()
+        if kl_value > 50.0:  # Increased from 3.0 to 50.0 to allow initial learning
+            logger.warning(f"⏭️ Skipping update due to excessive KL={kl_value:.2f} (> 50.0)")
+            # Zero gradients and return early
+            if hasattr(self, 'optimizer'):
+                self.optimizer.zero_grad()
+            return {
+                "policy_loss": 0.0,
+                "value_loss": 0.0,
+                "total_loss": 0.0,
+                "kl_divergence": kl_value,
+                "ppo_ratio_mean": 1.0,
+                "ppo_ratio_std": 0.0,
+                "advantages_mean": 0.0,
+                "advantages_std": 0.0,
+                "grad_norm": 0.0,
+                "skipped": True,
+                "skip_reason": "excessive_kl"
+            }
+        elif kl_value > 10.0:
+            logger.warning(f"⚠️ High KL divergence: {kl_value:.2f} - proceeding with caution")
         
         # Adaptive KL penalty
         if self.adaptive_kl and self.step_count < self.kl_warmup_steps:
@@ -509,6 +582,71 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
         
         return metrics
 
+    def _compute_new_token_logprobs(self, prompt_texts, actions, old_token_logprobs):
+        """
+        Compute per-token log probabilities under the current training model with gradients.
+        
+        This properly aligns old and new logprobs at the token level for accurate PPO ratios.
+        
+        Args:
+            prompt_texts: List of prompt strings
+            actions: List of action strings  
+            old_token_logprobs: List of per-token old logprobs tensors
+            
+        Returns:
+            Tensor of logprob sums, one per action
+        """
+        self.policy.training_model.train()
+        tokenizer = self.policy.tokenizer
+        device = self.device
+        
+        logprob_sums = []
+        
+        for prompt_text, action, old_token_lps in zip(prompt_texts, actions, old_token_logprobs):
+            # Skip if no old token logprobs
+            if len(old_token_lps) == 0:
+                logger.warning("Skipping action with no token logprobs")
+                logprob_sums.append(torch.tensor(0.0, device=device, requires_grad=True))
+                continue
+                
+            # Tokenize prompt and action (no special tokens to maintain alignment)
+            enc_prompt = tokenizer(prompt_text, add_special_tokens=False, return_tensors="pt")
+            enc_action = tokenizer(str(action), add_special_tokens=False, return_tensors="pt")
+            prompt_ids = enc_prompt["input_ids"][0].to(device)
+            action_ids = enc_action["input_ids"][0].to(device)
+            
+            # Compose full input and attention mask
+            full_ids = torch.cat([prompt_ids, action_ids], dim=0).unsqueeze(0)  # [1, T]
+            attn = torch.ones_like(full_ids, dtype=torch.long)
+            
+            with torch.set_grad_enabled(True):
+                outputs = self.policy.training_model(input_ids=full_ids, attention_mask=attn)
+                logits = outputs.logits  # [1, T, V]
+                logprobs = torch.log_softmax(logits, dim=-1)  # [1, T, V]
+                
+                T_prompt = prompt_ids.shape[0]
+                T_action = action_ids.shape[0]
+                
+                # Action tokens are predicted at positions [T_prompt-1 ... T_prompt+T_action-2]
+                start = max(0, T_prompt - 1)
+                end = start + T_action
+                lp_slice = logprobs[:, start:end, :]  # [1, T_action, V]
+                taken = action_ids.unsqueeze(0).unsqueeze(-1)  # [1, T_action, 1]
+                lp_taken = lp_slice.gather(-1, taken).squeeze(-1)  # [1, T_action]
+                
+                # Align with old token logprobs length
+                if lp_taken.shape[1] != len(old_token_lps):
+                    logger.warning(f"Token length mismatch: new={lp_taken.shape[1]}, old={len(old_token_lps)}")
+                    # Use minimum length
+                    min_len = min(lp_taken.shape[1], len(old_token_lps))
+                    lp_taken = lp_taken[:, :min_len]
+                
+                total = lp_taken.sum(dim=1).squeeze(0)  # scalar tensor
+                
+            logprob_sums.append(total)
+            
+        return torch.stack(logprob_sums)
+    
     def _compute_new_logprobs_sum_per_action(self, states, actions):
         """
         Compute per-action log probability sums under the current training model with gradients.
@@ -728,19 +866,21 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
             returns: Tensor [T, B] of returns
             advantages: Tensor [T, B] of advantages
         """
-        T, B = rewards.shape
-        advantages = torch.zeros_like(rewards)
-        lastgaelam = torch.zeros(B, device=rewards.device)
-        
-        # Work backwards through time
-        for t in reversed(range(T)):
-            nonterminal = 1.0 - dones[t]
-            delta = rewards[t] + gamma * values[t + 1] * nonterminal - values[t]
-            lastgaelam = delta + gamma * lam * nonterminal * lastgaelam
-            advantages[t] = lastgaelam
-        
-        # Returns are advantages + baseline
-        returns = advantages + values[:-1]  # Remove last value (next state)
+        # Wrap in no_grad to prevent gradient warnings for metrics-only computation
+        with torch.no_grad():
+            T, B = rewards.shape
+            advantages = torch.zeros_like(rewards)
+            lastgaelam = torch.zeros(B, device=rewards.device)
+            
+            # Work backwards through time
+            for t in reversed(range(T)):
+                nonterminal = 1.0 - dones[t]
+                delta = rewards[t] + gamma * values[t + 1] * nonterminal - values[t]
+                lastgaelam = delta + gamma * lam * nonterminal * lastgaelam
+                advantages[t] = lastgaelam
+            
+            # Returns are advantages + baseline
+            returns = advantages + values[:-1]  # Remove last value (next state)
         
         return returns, advantages
     

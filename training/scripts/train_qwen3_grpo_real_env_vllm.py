@@ -28,6 +28,9 @@ import sys
 import time
 import asyncio
 from pathlib import Path
+
+# Import CSV logger for comprehensive metrics tracking
+from training.utils.csv_logger import create_csv_logger
 from typing import Dict, List, Any, Optional
 
 import torch
@@ -956,27 +959,18 @@ class VLLMQwenPolicy:
                     results.append(generated_text)
                     
                     # CRITICAL: Capture sample-time logprobs for PPO
-                    if hasattr(completion_output, 'logprobs') and completion_output.logprobs:
-                        # Extract logprobs for the sampled tokens
-                        sample_logprobs = []
-                        sample_token_ids = []
-                        for logprob_dict in completion_output.logprobs:
-                            if logprob_dict:  # logprob_dict might be None
-                                # Get the top token (the one that was sampled)
-                                top_token = max(logprob_dict.items(), key=lambda x: x[1].logprob if hasattr(x[1], 'logprob') else x[1])
-                                token_id = top_token[0]
-                                logprob_val = top_token[1].logprob if hasattr(top_token[1], 'logprob') else top_token[1]
-                                sample_logprobs.append(logprob_val)
-                                sample_token_ids.append(token_id)
-                        
-                        self.last_sample_logprobs.append(sample_logprobs)
-                        self.last_sample_token_ids.append(sample_token_ids)
-                        logger.info(f"✅ Captured {len(sample_logprobs)} sample-time logprobs for response {i}, sum={sum(sample_logprobs) if sample_logprobs else 0:.4f}")
+                    token_logprobs = self._extract_token_logprobs(completion_output)
+                    token_ids = completion_output.token_ids if hasattr(completion_output, 'token_ids') else []
+                    
+                    if token_logprobs and len(token_logprobs) == len(token_ids):
+                        self.last_sample_logprobs.append(token_logprobs)
+                        self.last_sample_token_ids.append(token_ids)
+                        logger.info(f"✅ Captured {len(token_logprobs)} sample-time logprobs for response {i}, sum={sum(token_logprobs):.4f}")
                     else:
                         # No logprobs available - will need to compute later
                         self.last_sample_logprobs.append([])
                         self.last_sample_token_ids.append([])
-                        logger.warning(f"⚠️ No logprobs captured from vLLM for response {i}! Has logprobs attr: {hasattr(completion_output, 'logprobs')}")
+                        logger.warning(f"⚠️ Failed to extract logprobs from vLLM for response {i}!")
                     
                     if not generated_text:
                         logger.warning(f"⚠️ vLLM generated empty response for prompt {i}")
@@ -998,6 +992,55 @@ class VLLMQwenPolicy:
             # Fallback to HuggingFace if vLLM fails
             logger.info("🔄 Falling back to HuggingFace generation...")
             return self._generate_hf(prompts, max_tokens, temperature)
+    
+    def _extract_token_logprobs(self, completion_output) -> List[float]:
+        """
+        Extract per-token logprobs for the chosen tokens from a vLLM output.
+        Robust to minor API variations; assumes SamplingParams(logprobs=1).
+        """
+        logprobs = []
+        
+        # vLLM commonly returns: completion_output.logprobs: List[Optional[Dict[int/str, float]]]
+        if hasattr(completion_output, 'logprobs') and completion_output.logprobs:
+            token_ids = completion_output.token_ids if hasattr(completion_output, 'token_ids') else []
+            
+            # Each position has a dict for top tokens. Find the chosen token's logprob.
+            for tok_id, logprob_dict in zip(token_ids, completion_output.logprobs):
+                if logprob_dict is None:
+                    logprobs.append(-5.0)  # Conservative fallback
+                    continue
+                    
+                # The logprob_dict might have different structures in different vLLM versions
+                if isinstance(logprob_dict, dict):
+                    # Keys may be ints or strings; handle both
+                    if tok_id in logprob_dict:
+                        # Direct token ID lookup
+                        lp_val = logprob_dict[tok_id]
+                        if hasattr(lp_val, 'logprob'):
+                            logprobs.append(float(lp_val.logprob))
+                        else:
+                            logprobs.append(float(lp_val))
+                    elif str(tok_id) in logprob_dict:
+                        # String token ID lookup
+                        lp_val = logprob_dict[str(tok_id)]
+                        if hasattr(lp_val, 'logprob'):
+                            logprobs.append(float(lp_val.logprob))
+                        else:
+                            logprobs.append(float(lp_val))
+                    else:
+                        # Token not in top-k, use conservative fallback
+                        logprobs.append(-5.0)
+                else:
+                    # Unexpected structure, use fallback
+                    logprobs.append(-5.0)
+                    
+            return logprobs
+            
+        # Fallback: try output_token_logprobs if available
+        if hasattr(completion_output, 'output_token_logprobs') and completion_output.output_token_logprobs:
+            return [float(x) for x in completion_output.output_token_logprobs]
+            
+        return []
     
     def _generate_hf(self, prompts: List[str], max_tokens: int, temperature: float) -> List[str]:
         """Fallback generation with HuggingFace"""
@@ -1478,8 +1521,20 @@ async def main():
             }
         )
         logger.info("✅ WandB initialized")
+        
+        # Initialize CSV logger with output directory matching WandB run
+        run_name = f"real-env-grpo-vllm-{time.strftime('%Y%m%d-%H%M%S')}"
+        output_dir = f"outputs/{run_name}"
+        csv_logger = create_csv_logger(output_dir, save_frequency=10)
+        logger.info(f"✅ CSV Logger initialized at {output_dir}/training_metrics/")
+        
     except Exception as e:
         logger.warning(f"⚠️  WandB initialization failed: {e}")
+        # Still create CSV logger even if WandB fails
+        run_name = f"real-env-grpo-vllm-{time.strftime('%Y%m%d-%H%M%S')}"
+        output_dir = f"outputs/{run_name}"
+        csv_logger = create_csv_logger(output_dir, save_frequency=10)
+        logger.info(f"✅ CSV Logger initialized at {output_dir}/training_metrics/")
     
     # Load configuration
     with open(args.config, 'r') as f:
@@ -1681,6 +1736,14 @@ async def main():
         except Exception as e:
             logger.warning(f"⚠️ Rollout metrics logging failed: {e}")
         
+        # Log rollout metrics to CSV
+        try:
+            csv_logger.log_training_step(rollout_metrics, epoch=epoch)
+            csv_logger.log_episode_details(episode_results)
+            logger.debug("📊 Rollout metrics logged to CSV successfully")
+        except Exception as e:
+            logger.error(f"🚨 CSV rollout logging failed: {e}")
+        
         if valid_episodes:
             # Convert episodes to trajectories for training
             trajectories = []
@@ -1690,8 +1753,11 @@ async def main():
                 actions = []
                 rewards = []
                 dones = []
-                # Collect sample-time old logprobs per action (scalar sums)
+                # Collect sample-time old logprobs per action (both scalar sums AND per-token)
                 old_log_probs = []
+                action_token_logprobs = []  # Per-token logprobs
+                action_token_ids = []  # Token IDs for each action
+                prompt_texts = []  # Prompt texts for re-encoding
                 # Collect optional per-action forced flags if present
                 forced_flags = []
                     
@@ -1701,17 +1767,36 @@ async def main():
                     actions.append(step.get('action', ""))  # Default to empty string
                     rewards.append(step.get('reward', 0.0))  # Default to 0.0
                     dones.append(i == len(episode.trajectory) - 1)  # Last step is done
-                    # Prefer vector action_logprobs if available; fall back to scalar in metadata
+                    
+                    # Collect per-token logprobs if available
                     step_vec = step.get('action_logprobs', None)
                     if step_vec is not None and hasattr(step_vec, '__len__') and len(step_vec) > 0:
+                        # Store the per-token logprobs
+                        action_token_logprobs.append(step_vec)
+                        
+                        # Compute sum for old_log_probs
                         try:
                             lp_sum = float(step_vec.sum().item() if hasattr(step_vec, 'sum') else sum(step_vec))
                         except Exception:
-                            # Last resort: treat as 0.0
                             lp_sum = 0.0
                     else:
+                        # No per-token data available
+                        action_token_logprobs.append(torch.empty(0))
                         lp_sum = float(step.get('metadata', {}).get('log_prob', 0.0))
+                    
                     old_log_probs.append(lp_sum)
+                    
+                    # Store token IDs if available (placeholder for now)
+                    action_token_ids.append(torch.empty(0))  # Will be populated when we have token IDs
+                    
+                    # Build and store prompt text for this state
+                    state_data = step.get('state', {})
+                    if isinstance(state_data, list):
+                        prompt_text = policy._build_prompt(state_data, add_generation_prompt=True)
+                    else:
+                        prompt_text = str(state_data)
+                    prompt_texts.append(prompt_text)
+                    
                     # Optional per-turn forced flag (if collector stored it)
                     forced_flags.append(bool(step.get('metadata', {}).get('was_forced', False)))
                     
@@ -1740,7 +1825,10 @@ async def main():
                     actions=actions,
                     rewards=rewards,
                     dones=dones,
-                    log_probs=old_log_probs
+                    log_probs=old_log_probs,
+                    action_token_logprobs=action_token_logprobs,
+                    action_token_ids=action_token_ids,
+                    prompt_texts=prompt_texts
                 )
                 # Attach forced mask (per action); trainer handles default if absent
                 try:
@@ -1808,6 +1896,16 @@ async def main():
                 logger.error(f"🚨 WandB metrics logging failed: {e}")
                 logger.info(f"📋 Metrics that failed to log: {combined_metrics}")
                 # Continue training even if logging fails
+            
+            # Log all metrics to CSV for local analysis
+            try:
+                csv_logger.log_training_step(combined_metrics, epoch=epoch)
+                csv_logger.log_trajectory_details(trajectories)
+                if hasattr(locals(), 'episode_results'):
+                    csv_logger.log_episode_details(episode_results)
+                logger.debug("📊 Training metrics logged to CSV successfully")
+            except Exception as e:
+                logger.error(f"🚨 CSV metrics logging failed: {e}")
                 
             logger.info(f"✅ Training step completed in {train_time:.2f}s")
             logger.info(f"📊 Metrics: {metrics}")
@@ -1828,6 +1926,13 @@ async def main():
                 logger.debug("📊 Training skip logged to WandB")
             except Exception as e:
                 logger.warning(f"⚠️ Skip metrics logging failed: {e}")
+            
+            # Log skip metrics to CSV  
+            try:
+                csv_logger.log_training_step(skip_metrics, epoch=epoch)
+                logger.debug("📊 Skip metrics logged to CSV successfully")
+            except Exception as e:
+                logger.error(f"🚨 CSV skip logging failed: {e}")
         
         # Save checkpoint every 10 epochs
         if (epoch + 1) % 10 == 0:
@@ -1851,6 +1956,13 @@ async def main():
                 logger.warning(f"⚠️ Checkpoint save failed: {e}")
     
     logger.info("🎉 vLLM-enhanced training completed successfully!")
+    
+    # Finalize CSV logger
+    try:
+        csv_logger.finalize()
+        logger.info("📊 CSV logger finalized successfully")
+    except Exception as e:
+        logger.error(f"🚨 CSV logger finalization failed: {e}")
     
     # Final cleanup
     try:

@@ -47,6 +47,9 @@ class Trajectory:
         advantages (Optional[torch.Tensor]): Computed advantages (filled by trainer)
         total_reward (float): Sum of all rewards in trajectory
         length (int): Number of steps in trajectory
+        action_token_ids (Optional[List[torch.Tensor]]): Token IDs for each action
+        action_token_logprobs (Optional[List[torch.Tensor]]): Per-token logprobs at sample time
+        prompt_texts (Optional[List[str]]): Prompt texts for re-encoding
     """
     
     def __init__(
@@ -61,6 +64,9 @@ class Trajectory:
         old_log_probs: Optional[torch.Tensor] = None,
         advantages: Optional[torch.Tensor] = None,
         returns: Optional[torch.Tensor] = None,
+        action_token_ids: Optional[List[torch.Tensor]] = None,
+        action_token_logprobs: Optional[List[torch.Tensor]] = None,
+        prompt_texts: Optional[List[str]] = None,
     ):
         self.task_id = task_id
         self.states = states
@@ -72,6 +78,9 @@ class Trajectory:
         self.old_log_probs = old_log_probs
         self.advantages = advantages
         self.returns = returns
+        self.action_token_ids = action_token_ids or []
+        self.action_token_logprobs = action_token_logprobs or []
+        self.prompt_texts = prompt_texts or []
         
         # Computed properties
         self.total_reward = sum(rewards)
