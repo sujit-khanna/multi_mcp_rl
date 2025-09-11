@@ -58,6 +58,12 @@ max_grad_norm: 1.0                  # Maximum gradient norm (ADDED)
 policy_loss_clipping: 10.0          # Clip policy loss to prevent instability
 value_loss_clipping: 10.0           # Clip value loss to prevent instability
 
+# NEW: Advanced Stability Controls
+kl_hard_cap: 100.0                  # Skip update if KL exceeds this (very relaxed for bootstrap training)
+min_unforced_tokens_per_step: 0     # Minimum learnable tokens per step (0 = disabled to allow forced action learning)
+min_unforced_fraction_per_step: 0.0 # Minimum fraction of unforced tokens (0.0 = disabled)
+max_ratio_per_token: 0              # Drop tokens with PPO ratio > this value (0 = disabled)
+
 # Numerical Stability (NEW)
 ratio_eps: 1e-8                     # Epsilon for ratio computation
 log_prob_eps: 1e-8                  # Epsilon for log probability computation

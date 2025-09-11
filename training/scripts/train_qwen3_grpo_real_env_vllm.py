@@ -1646,19 +1646,24 @@ async def main():
         reference_policy = policy
         logger.info("⚠️ KL divergence will be 0 (using same policy as reference)")
     
-    # Setup GRPO config
-    grpo_config = {
-        "learning_rate": float(config.get("learning_rate", 5e-5)),  # Use config's learning_rate (5e-5) not training sub-config
-        "batch_size": training_config.get("batch_size", 1),
-        "kl_coeff": float(training_config.get("kl_coeff", 0.01)),
-        "gamma": float(training_config.get("gamma", 0.99)),
-        "lam": float(training_config.get("lam", 0.95)),
-        "clip_ratio": float(training_config.get("clip_ratio", 0.2)),
-        "value_loss_coeff": float(training_config.get("value_loss_coeff", 0.5)),
-        "entropy_coeff": float(training_config.get("entropy_coeff", 0.01)),
-        "ref_policy_update_frequency": int(training_config.get("ref_policy_update_frequency", 100)),
-        "group_size": int(training_config.get("group_size", 2)),
-    }
+    # Load GRPO config from YAML file
+    grpo_config_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "configs",
+        "grpo_config_fixed.yaml"
+    )
+    
+    logger.info(f"Loading GRPO config from: {grpo_config_path}")
+    with open(grpo_config_path, 'r') as f:
+        grpo_config = yaml.safe_load(f)
+    
+    # Override learning rate from main config if provided
+    grpo_config["learning_rate"] = float(config.get("learning_rate", 5e-5))
+    
+    # Log critical stability settings
+    logger.info(f"🔧 Stability settings: min_unforced_tokens={grpo_config.get('min_unforced_tokens_per_step', 16)}, "
+                f"kl_hard_cap={grpo_config.get('kl_hard_cap', 3.0)}, "
+                f"max_ratio_per_token={grpo_config.get('max_ratio_per_token', 3.0)}")
     
     # Initialize GRPO trainer (using working trainer)
     trainer = GRPOTrainerGradientFix(
@@ -1739,7 +1744,9 @@ async def main():
         # Log rollout metrics to CSV
         try:
             csv_logger.log_training_step(rollout_metrics, epoch=epoch)
-            csv_logger.log_episode_details(episode_results)
+            # Convert EpisodeResult objects to dictionaries for CSV logging
+            episode_dicts = [episode.to_dict() if hasattr(episode, 'to_dict') else episode for episode in episode_results]
+            csv_logger.log_episode_details(episode_dicts)
             logger.debug("📊 Rollout metrics logged to CSV successfully")
         except Exception as e:
             logger.error(f"🚨 CSV rollout logging failed: {e}")

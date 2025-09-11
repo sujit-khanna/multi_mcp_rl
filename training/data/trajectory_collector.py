@@ -664,8 +664,10 @@ class TrajectoryCollector:
                     # Store the logprob data for the trainer (this is the key fix!)
                     self._store_action_logprobs(token_logprobs, logprob_sum, was_forced)
                     
+                    # Enhanced logging with unforced token count
+                    unforced_count = len(token_logprobs) if not was_forced else 0
                     logger.info(f"✅ Enhanced action with logprobs: sum={logprob_sum:.4f}, "
-                               f"tokens={len(token_logprobs)}, forced={was_forced}")
+                               f"tokens={len(token_logprobs)}, unforced={unforced_count}, forced={was_forced}")
                     
                     return action_text
                 else:
@@ -692,8 +694,9 @@ class TrajectoryCollector:
         self._current_episode_logprobs.append(token_logprobs.clone() if len(token_logprobs) > 0 else torch.empty(0))
         self._current_episode_forced_mask.append(was_forced)
         
-        # Log for debugging
-        logger.debug(f"📦 Stored logprobs: {len(token_logprobs)} tokens, sum={logprob_sum:.4f}, forced={was_forced}")
+        # Log for debugging with unforced count
+        unforced_count = len(token_logprobs) if not was_forced else 0
+        logger.debug(f"📦 Stored logprobs: {len(token_logprobs)} tokens (unforced={unforced_count}), sum={logprob_sum:.4f}, forced={was_forced}")
     
     def _reset_episode_logprobs(self):
         """Reset logprob storage for new episode."""

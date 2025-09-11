@@ -283,7 +283,100 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
         forced_count = forced_mask.sum().item()
         unforced_count = unforced_mask.sum().item()
         logger.info(f"Mask stats: {forced_count} forced, {unforced_count} unforced out of {len(forced_mask)} total")
+        
+        # NEW: Load stability config parameters
+        import os
+        grpo_cfg = self.grpo_config if hasattr(self, 'grpo_config') else {}
+        KL_HARD_CAP = float(os.getenv("KL_HARD_CAP", grpo_cfg.get("kl_hard_cap", 3.0)))
+        MIN_UNFORCED_TOKENS = int(os.getenv("MIN_UNFORCED_TOKENS_PER_STEP", grpo_cfg.get("min_unforced_tokens_per_step", 16)))
+        MIN_UNFORCED_FRACTION = float(os.getenv("MIN_UNFORCED_FRACTION_PER_STEP", grpo_cfg.get("min_unforced_fraction_per_step", 0.0)))
+        MAX_RATIO_PER_TOKEN = float(os.getenv("MAX_RATIO_PER_TOKEN", grpo_cfg.get("max_ratio_per_token", 3.0)))
+        if MAX_RATIO_PER_TOKEN <= 0:
+            MAX_RATIO_PER_TOKEN = None  # disabled
+        
+        # NEW: Build per-step boundaries for minimum unforced token gating
+        step_boundaries = []
+        offset = 0
+        dropped_steps = 0
+        kept_steps = []
+        
+        for traj_idx, traj in enumerate(trajectories):
+            for step_idx in range(traj.length):
+                # Determine step length based on available data
+                if hasattr(traj, 'action_token_logprobs') and traj.action_token_logprobs:
+                    if step_idx < len(traj.action_token_logprobs):
+                        step_token_data = traj.action_token_logprobs[step_idx]
+                        if hasattr(step_token_data, '__len__'):
+                            step_len = len(step_token_data)
+                        else:
+                            step_len = 1  # Scalar logprob
+                    else:
+                        step_len = 1
+                else:
+                    step_len = 1  # Fallback
+                step_boundaries.append((offset, offset + step_len, traj_idx, step_idx))
+                offset += step_len
 
+        # NEW: Apply minimum unforced tokens per step gating
+        enhanced_mask = unforced_mask.clone()
+        for start, end, traj_idx, step_idx in step_boundaries:
+            if end > len(unforced_mask):
+                break  # Safety check
+            step_mask = unforced_mask[start:end]
+            step_len = end - start
+            step_unforced = int(step_mask.sum())
+            step_unforced_frac = step_unforced / max(1, step_len)
+            
+            # Check thresholds
+            ok_count = (step_unforced >= MIN_UNFORCED_TOKENS)
+            ok_frac = (MIN_UNFORCED_FRACTION <= 0.0) or (step_unforced_frac >= MIN_UNFORCED_FRACTION)
+            
+            if ok_count and ok_frac:
+                kept_steps.append((traj_idx, step_idx))
+            else:
+                # Drop ALL tokens from this step
+                enhanced_mask[start:end] = False
+                dropped_steps += 1
+                logger.debug(f"Dropped step {traj_idx}.{step_idx}: {step_unforced}/{step_len} unforced (need >={MIN_UNFORCED_TOKENS})")
+        
+        if dropped_steps > 0:
+            before_tokens = int(unforced_mask.sum())
+            after_tokens = int(enhanced_mask.sum())
+            logger.warning(f"Step gating: dropped {dropped_steps}/{len(step_boundaries)} steps "
+                         f"below thresholds (min_unforced={MIN_UNFORCED_TOKENS}, min_frac={MIN_UNFORCED_FRACTION:.2f}). "
+                         f"Eligible tokens: {before_tokens} → {after_tokens}")
+        
+        # Update unforced mask with step gating
+        unforced_mask = enhanced_mask
+        unforced_count = unforced_mask.sum().item()
+        
+        if unforced_count == 0:
+            # CRITICAL: Allow training on forced actions when no unforced are available
+            # This is necessary for bootstrapping when the model hasn't learned the format yet
+            total_forced = forced_mask.sum().item()
+            if total_forced > 0 and MIN_UNFORCED_TOKENS <= 0:
+                logger.warning(f"No unforced tokens available, but allowing training on {total_forced} forced tokens (bootstrap mode)")
+                # Train on ALL tokens (forced) with reduced weight
+                unforced_mask = torch.ones_like(forced_mask)  # Include all tokens
+                unforced_count = unforced_mask.sum().item()
+            else:
+                logger.warning("No eligible tokens after step gating; skipping update.")
+                return {
+                    "policy_loss": 0.0,
+                    "value_loss": 0.0,
+                    "total_loss": 0.0,
+                    "kl_divergence": 0.0,
+                    "ppo_ratio_mean": 1.0,
+                    "ppo_ratio_std": 0.0,
+                    "advantages_mean": 0.0,
+                    "advantages_std": 0.0,
+                    "grad_norm": 0.0,
+                    "skipped": True,
+                    "skip_reason": "no_eligible_tokens_after_step_gating",
+                    "dropped_steps": dropped_steps,
+                    "kept_steps": len(kept_steps)
+                }
+        
         # ROBUST PPO RATIO COMPUTATION with empty tensor handling
         # Compute policy ratios with numerical stability on unforced steps
         log_ratios_full = current_log_probs - old_log_probs
@@ -312,6 +405,41 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
 
         # Extract unforced data with safety checks
         if unforced_mask.any():
+            # NEW: Per-token ratio gating (drop extreme ratios before extraction)
+            if MAX_RATIO_PER_TOKEN is not None:
+                # Check for extreme ratios
+                extreme_mask = (ratios_full > MAX_RATIO_PER_TOKEN) | (ratios_full < 1.0/MAX_RATIO_PER_TOKEN)
+                extreme_count = int(extreme_mask.sum())
+                
+                if extreme_count > 0:
+                    # Update unforced mask to exclude extreme positions
+                    before_count = int(unforced_mask.sum())
+                    unforced_mask = unforced_mask & ~extreme_mask
+                    after_count = int(unforced_mask.sum())
+                    
+                    logger.warning(f"Token ratio gating: dropped {extreme_count} tokens with "
+                                 f"ratio outside [{1.0/MAX_RATIO_PER_TOKEN:.3f}, {MAX_RATIO_PER_TOKEN:.3f}] "
+                                 f"(eligible tokens: {before_count} → {after_count})")
+                    
+                    if after_count == 0:
+                        logger.warning("No eligible tokens after ratio gating; skipping update.")
+                        return {
+                            "policy_loss": 0.0,
+                            "value_loss": 0.0,
+                            "total_loss": 0.0,
+                            "kl_divergence": 0.0,
+                            "ppo_ratio_mean": 1.0,
+                            "ppo_ratio_std": 0.0,
+                            "advantages_mean": 0.0,
+                            "advantages_std": 0.0,
+                            "grad_norm": 0.0,
+                            "skipped": True,
+                            "skip_reason": "no_tokens_after_ratio_gating",
+                            "dropped_steps": dropped_steps,
+                            "kept_steps": len(kept_steps)
+                        }
+            
+            # Extract after all gating
             log_ratios = log_ratios_full[unforced_mask]
             ratios = ratios_full[unforced_mask]
             adv_unforced = advantages[unforced_mask]
@@ -367,10 +495,10 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
         # Additional clamp on KL divergence itself
         kl_divergence = torch.clamp(kl_divergence, min=0.0, max=100.0)
         
-        # CRITICAL: KL hard-cap to prevent catastrophic updates (relaxed for initial training)
+        # CRITICAL: KL hard-cap to prevent catastrophic updates (using config value)
         kl_value = kl_divergence.item()
-        if kl_value > 50.0:  # Increased from 3.0 to 50.0 to allow initial learning
-            logger.warning(f"⏭️ Skipping update due to excessive KL={kl_value:.2f} (> 50.0)")
+        if KL_HARD_CAP is not None and kl_value > KL_HARD_CAP:
+            logger.warning(f"⏭️ Skipping update due to excessive KL={kl_value:.2f} (> {KL_HARD_CAP})")
             # Zero gradients and return early
             if hasattr(self, 'optimizer'):
                 self.optimizer.zero_grad()
@@ -385,10 +513,12 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
                 "advantages_std": 0.0,
                 "grad_norm": 0.0,
                 "skipped": True,
-                "skip_reason": "excessive_kl"
+                "skip_reason": "excessive_kl",
+                "dropped_steps": dropped_steps if 'dropped_steps' in locals() else 0,
+                "kept_steps": len(kept_steps) if 'kept_steps' in locals() else 0
             }
-        elif kl_value > 10.0:
-            logger.warning(f"⚠️ High KL divergence: {kl_value:.2f} - proceeding with caution")
+        elif kl_value > KL_HARD_CAP * 0.8 if KL_HARD_CAP else 10.0:
+            logger.warning(f"⚠️ High KL divergence: {kl_value:.2f} - approaching limit {KL_HARD_CAP}")
         
         # Adaptive KL penalty
         if self.adaptive_kl and self.step_count < self.kl_warmup_steps:
@@ -548,6 +678,11 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
             "ppo/forced_fraction": forced_mask.float().mean().item() if forced_mask.numel() > 0 else 0.0,
             "ppo/unforced_count": int(unforced_mask.sum().item()) if unforced_mask.numel() > 0 else 0,
             "ppo/total_steps": len(advantages) if hasattr(advantages, '__len__') else advantages.numel(),
+            "stability/dropped_steps": dropped_steps if 'dropped_steps' in locals() else 0,
+            "stability/kept_steps": len(kept_steps) if 'kept_steps' in locals() else 0,
+            "stability/tokens_after_gating": int(unforced_mask.sum()) if 'unforced_mask' in locals() else 0,
+            "stability/kl_hard_cap": KL_HARD_CAP if 'KL_HARD_CAP' in locals() else 3.0,
+            "stability/min_unforced_tokens": MIN_UNFORCED_TOKENS if 'MIN_UNFORCED_TOKENS' in locals() else 16,
         }
         
         if value_loss != 0:
