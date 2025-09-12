@@ -62,8 +62,8 @@ value_loss_clipping: 10.0           # Clip value loss to prevent instability
 kl_target: 0.4                      # Target KL per token (nats)
 kl_penalty_coef: 0.2                # KL penalty coefficient (adaptive)
 kl_hard_cap: 3.0                    # Skip update if KL exceeds this (production value)
-min_unforced_tokens_per_step: 1     # Minimum learnable tokens per step (was 16)
-min_unforced_fraction_per_step: 0.10 # Minimum fraction of unforced tokens (10%, was 30%)
+min_unforced_tokens_per_step: 0     # Allow bootstrap training on forced tokens (was 1)
+min_unforced_fraction_per_step: 0.0  # Allow any fraction during bootstrap (was 0.10)
 min_ratio_per_token: 0.25           # Drop tokens with PPO ratio < this value
 max_ratio_per_token: 4.0            # Drop tokens with PPO ratio > this value
 adaptive_kl_beta: true              # Enable adaptive KL coefficient
