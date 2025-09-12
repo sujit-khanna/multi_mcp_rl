@@ -1800,26 +1800,48 @@ async def main():
                     rewards.append(step.get('reward', 0.0))  # Default to 0.0
                     dones.append(i == len(episode.trajectory) - 1)  # Last step is done
                     
-                    # Collect per-token logprobs if available
-                    step_vec = step.get('action_logprobs', None)
-                    if step_vec is not None and hasattr(step_vec, '__len__') and len(step_vec) > 0:
-                        # Store the per-token logprobs
-                        action_token_logprobs.append(step_vec)
-                        
-                        # Compute sum for old_log_probs
-                        try:
-                            lp_sum = float(step_vec.sum().item() if hasattr(step_vec, 'sum') else sum(step_vec))
-                        except Exception:
-                            lp_sum = 0.0
+                    # CRITICAL FIX: Use episode-level per-token data if available
+                    if (hasattr(episode, 'action_token_logprobs') and 
+                        episode.action_token_logprobs and 
+                        i < len(episode.action_token_logprobs)):
+                        # Get per-token logprobs from episode-level storage
+                        step_vec = episode.action_token_logprobs[i]
+                        if step_vec is not None and hasattr(step_vec, '__len__') and len(step_vec) > 0:
+                            # Store the per-token logprobs
+                            action_token_logprobs.append(step_vec)
+                            
+                            # Compute sum for old_log_probs
+                            try:
+                                lp_sum = float(step_vec.sum().item() if hasattr(step_vec, 'sum') else sum(step_vec))
+                            except Exception:
+                                lp_sum = 0.0
+                        else:
+                            # Empty per-token data
+                            action_token_logprobs.append(torch.empty(0))
+                            lp_sum = float(step.get('metadata', {}).get('log_prob', 0.0))
                     else:
-                        # No per-token data available
-                        action_token_logprobs.append(torch.empty(0))
-                        lp_sum = float(step.get('metadata', {}).get('log_prob', 0.0))
+                        # Fallback: try step-level action_logprobs (old format)
+                        step_vec = step.get('action_logprobs', None)
+                        if step_vec is not None and hasattr(step_vec, '__len__') and len(step_vec) > 0:
+                            action_token_logprobs.append(step_vec)
+                            try:
+                                lp_sum = float(step_vec.sum().item() if hasattr(step_vec, 'sum') else sum(step_vec))
+                            except Exception:
+                                lp_sum = 0.0
+                        else:
+                            # No per-token data available
+                            action_token_logprobs.append(torch.empty(0))
+                            lp_sum = float(step.get('metadata', {}).get('log_prob', 0.0))
                     
                     old_log_probs.append(lp_sum)
                     
-                    # Store token IDs if available (placeholder for now)
-                    action_token_ids.append(torch.empty(0))  # Will be populated when we have token IDs
+                    # Store token IDs and masks if available
+                    if (hasattr(episode, 'action_token_ids') and 
+                        episode.action_token_ids and 
+                        i < len(episode.action_token_ids)):
+                        action_token_ids.append(episode.action_token_ids[i])
+                    else:
+                        action_token_ids.append(torch.empty(0))  # Will be populated when we have token IDs
                     
                     # Build and store prompt text for this state
                     state_data = step.get('state', {})

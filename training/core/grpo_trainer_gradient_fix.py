@@ -859,8 +859,14 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
                 T_prompt = prompt_ids.shape[0]
                 T_action = action_ids.shape[0]
                 
-                # Action tokens are predicted at positions [T_prompt-1 ... T_prompt+T_action-2]
-                start = max(0, T_prompt - 1)
+                # CRITICAL FIX: Off-by-one error fix for next-token prediction
+                # If Lp = len(prompt_ids), and La = len(action_ids),
+                # Use logits[:, Lp-1 : Lp-1+La, :] to gather next-token logprobs for action tokens
+                if T_prompt == 0:
+                    logger.warning("Empty prompt, using start=0")
+                    start = 0
+                else:
+                    start = T_prompt - 1  # Correct off-by-one fix
                 end = start + T_action
                 lp_slice = logprobs[:, start:end, :]  # [1, T_action, V]
                 taken = action_ids.unsqueeze(0).unsqueeze(-1)  # [1, T_action, 1]

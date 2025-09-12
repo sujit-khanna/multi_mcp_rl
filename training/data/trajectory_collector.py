@@ -71,6 +71,10 @@ class EpisodeResult:
         error: Optional[str] = None,
         execution_time: float = 0.0,
         initial_prompt: Optional[List[Dict[str, str]]] = None,
+        # CRITICAL: Per-token data for proper PPO training
+        action_token_logprobs: Optional[List[torch.Tensor]] = None,
+        prompt_token_ids_hf: Optional[List[torch.Tensor]] = None,
+        token_unforced_masks: Optional[List[torch.Tensor]] = None,
     ):
         self.task_id = task_id
         self.trajectory = trajectory
@@ -98,6 +102,11 @@ class EpisodeResult:
         self.error = error
         self.execution_time = execution_time
         self.initial_prompt = initial_prompt or []
+        
+        # CRITICAL: Store per-token data for proper PPO training
+        self.action_token_logprobs = action_token_logprobs or []
+        self.prompt_token_ids_hf = prompt_token_ids_hf or []
+        self.token_unforced_masks = token_unforced_masks or []
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary format for serialization."""
@@ -614,6 +623,10 @@ class TrajectoryCollector:
             "conversation_history": conversation_history,
             "is_valid": is_valid,  # Flag for dropping invalid trajectories
             "invalid_turns": invalid_turns,  # Which turns were invalid
+            # CRITICAL: Transfer per-token data for proper PPO training
+            "action_token_logprobs": getattr(self, '_current_episode_logprobs', []),
+            "token_unforced_masks": [],  # Will be populated when needed
+            "prompt_token_ids_hf": [],  # Will be populated when needed
         }
         
         if not is_valid:
@@ -846,6 +859,10 @@ class TrajectoryCollector:
             reward_breakdown=trajectory_data.get("reward_breakdown", {}),
             execution_time=execution_time,
             initial_prompt=task_data.get("prompt", []),
+            # CRITICAL: Transfer per-token data for proper PPO training
+            action_token_logprobs=trajectory_data.get("action_token_logprobs", []),
+            prompt_token_ids_hf=trajectory_data.get("prompt_token_ids_hf", []),
+            token_unforced_masks=trajectory_data.get("token_unforced_masks", []),
         )
     
     async def _cleanup_environment(self, env: Any) -> None:
