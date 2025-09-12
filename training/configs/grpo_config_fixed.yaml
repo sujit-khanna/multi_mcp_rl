@@ -22,8 +22,8 @@ entropy_coef: 0.01                   # Entropy regularization coefficient
 value_loss_coef: 0.5                # Value function loss coefficient
 
 # Reference Policy Management - FIXED SETTINGS
-ref_policy_update_frequency: 100     # Update every 100 steps (was 10000!)
-ref_policy_ema_alpha: 0.95          # Faster updates (was 0.99)
+ref_policy_update_frequency: 20      # Update every 20 steps for better stability  
+ref_policy_ema_alpha: 0.99          # Slower EMA for more stable reference
 ref_policy_init_from_checkpoint: null
 emergency_kl_threshold: 0.05         # Force update if KL exceeds this
 min_steps_before_ref_update: 10      # Don't update in first 10 steps
@@ -62,8 +62,8 @@ value_loss_clipping: 10.0           # Clip value loss to prevent instability
 kl_target: 0.4                      # Target KL per token (nats)
 kl_penalty_coef: 0.2                # KL penalty coefficient (adaptive)
 kl_hard_cap: 3.0                    # Skip update if KL exceeds this (production value)
-min_unforced_tokens_per_step: 0     # Allow bootstrap training on forced tokens (was 1)
-min_unforced_fraction_per_step: 0.0  # Allow any fraction during bootstrap (was 0.10)
+min_unforced_tokens_per_step: 16    # Minimum learnable tokens per step
+min_unforced_fraction_per_step: 0.30 # Minimum fraction of unforced tokens (30%)
 min_ratio_per_token: 0.25           # Drop tokens with PPO ratio < this value
 max_ratio_per_token: 4.0            # Drop tokens with PPO ratio > this value
 adaptive_kl_beta: true              # Enable adaptive KL coefficient

@@ -1884,12 +1884,53 @@ async def main():
                     action_token_ids=action_token_ids,
                     prompt_texts=prompt_texts
                 )
-                # Attach forced mask (per action); trainer handles default if absent
+                # CRITICAL FIX: Build token-level forced mask aligned with flattened old_log_probs
                 try:
                     import torch
-                    trajectory.forced_mask = torch.tensor(forced_flags, dtype=torch.bool)
-                except Exception:
-                    pass
+                    
+                    # Build flattened per-token forced mask from episode-level data
+                    forced_bits = []
+                    
+                    if (hasattr(episode, 'token_unforced_masks') and 
+                        episode.token_unforced_masks and 
+                        len(episode.token_unforced_masks) >= len(states)):
+                        # Use episode-level per-token masks if available
+                        for i in range(len(states)):
+                            if i < len(episode.token_unforced_masks):
+                                step_mask = episode.token_unforced_masks[i]
+                                if hasattr(step_mask, 'tolist'):
+                                    unforced_bits = step_mask.tolist()
+                                else:
+                                    unforced_bits = step_mask if isinstance(step_mask, list) else [step_mask]
+                                # Convert unforced (True) to forced (False) and vice versa
+                                forced_bits.extend([not b for b in unforced_bits])
+                            else:
+                                # Default: if no mask data, assume single token is forced
+                                forced_bits.append(True)
+                    else:
+                        # Fallback: expand step-level flags to match token counts
+                        for i, step_forced in enumerate(forced_flags):
+                            if (hasattr(episode, 'action_token_logprobs') and 
+                                episode.action_token_logprobs and 
+                                i < len(episode.action_token_logprobs)):
+                                # Use actual token count for this step
+                                step_tokens = episode.action_token_logprobs[i]
+                                token_count = len(step_tokens) if hasattr(step_tokens, '__len__') else 1
+                            else:
+                                # Default to 1 token per step
+                                token_count = 1
+                            # Repeat the step-level forced flag for all tokens in the step
+                            forced_bits.extend([step_forced] * token_count)
+                    
+                    if forced_bits:
+                        trajectory.forced_mask = torch.tensor(forced_bits, dtype=torch.bool)
+                        logger.debug(f"📊 Built token-level forced mask: {len(forced_bits)} tokens, "
+                                   f"{sum(forced_bits)} forced ({sum(forced_bits)/len(forced_bits):.1%})")
+                    else:
+                        logger.warning("⚠️ No token-level forced mask could be built")
+                        
+                except Exception as e:
+                    logger.error(f"❌ Failed to build token-level forced mask: {e}")
                 trajectories.append(trajectory)
         else:
             trajectories = []

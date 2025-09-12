@@ -221,16 +221,8 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
                     self.policy.training_model.train()
                 
                 # CRITICAL FIX: Apply a tiny gradient update to ensure policy has changed
-                # This creates a difference between sample-time and current logprobs
-                trainable_params = list(self.policy.get_trainable_parameters())
-                if trainable_params:
-                    # Add tiny noise to LoRA weights to break the degeneracy
-                    with torch.no_grad():
-                        for param in trainable_params[:10]:  # Only modify first 10 params to be safe
-                            if param.requires_grad and param.numel() > 0:
-                                # Add 1e-6 noise - small enough not to hurt training, large enough to break degeneracy
-                                param.add_(torch.randn_like(param) * 1e-6)
-                    logger.info(f"✅ Added tiny perturbation to {min(10, len(trainable_params))} parameters to break PPO degeneracy")
+                # REMOVED: Tiny perturbation hack - unnecessary and can destabilize training
+                # The ratio will deviate from 1.0 naturally after the first optimizer step
                 
                 # Check if we have per-token data for proper PPO ratio computation
                 if all_action_token_logprobs and any(len(lp) > 0 for lp in all_action_token_logprobs):
@@ -264,14 +256,18 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
         # Apply forced mask to keep PPO on-policy
         # CRITICAL FIX: Ensure forced_mask defaults to False (unforced) not True
         forced_list = getattr(self, '_forced_masks', None)
-        if forced_list is not None and len(forced_list) == len(old_log_probs):
-            # Convert to bool tensor explicitly
-            forced_mask = torch.tensor(forced_list, dtype=torch.bool, device=self.device)
-            logger.debug(f"Using provided forced mask: {forced_mask.sum().item()}/{len(forced_mask)} forced")
-        else:
-            # DEFAULT: All steps are UNFORCED (False) unless explicitly marked
-            forced_mask = torch.zeros(len(old_log_probs), dtype=torch.bool, device=self.device)
-            logger.debug(f"Using default unforced mask (all False)")
+        # CRITICAL FIX: Never proceed without valid per-token mask
+        if forced_list is None or len(forced_list) != len(old_log_probs):
+            # Do NOT assume all unforced; skip this update safely
+            self.optimizer.zero_grad(set_to_none=True)
+            logger.error(f"❌ Missing or mis-sized forced/unforced mask from collector; "
+                        f"expected {len(old_log_probs)}, got {len(forced_list) if forced_list else 0}. "
+                        f"Skipping update to avoid training on schema tokens.")
+            return {"skipped": True, "skip_reason": "missing_forced_mask"}
+        
+        # Convert to bool tensor explicitly
+        forced_mask = torch.tensor(forced_list, dtype=torch.bool, device=self.device)
+        logger.debug(f"Using provided forced mask: {forced_mask.sum().item()}/{len(forced_mask)} forced")
 
         # Ensure mask is bool type
         if forced_mask.dtype != torch.bool:
@@ -407,7 +403,9 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
         # ROBUST PPO RATIO COMPUTATION with empty tensor handling
         # Compute policy ratios with numerical stability on unforced steps
         log_ratios_full = current_log_probs - old_log_probs
-        log_ratios_full = torch.clamp(log_ratios_full, min=-20.0, max=2.0)
+        # CRITICAL FIX: Use wider bounds to avoid hiding misalignment outliers
+        # Let the dedicated ratio gate handle the usable range
+        log_ratios_full = torch.clamp(log_ratios_full, min=-20.0, max=20.0)
         ratios_full = torch.exp(log_ratios_full).clamp(1e-8, 1e8)
         
         # PRE-OPTIMIZATION LOGGING for debugging (before any failures)
@@ -602,11 +600,15 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
         elif kl_value > KL_HARD_CAP * 0.8 if KL_HARD_CAP else 10.0:
             logger.warning(f"⚠️ High KL divergence: {kl_value:.2f} - approaching limit {KL_HARD_CAP}")
         
-        # Adaptive KL penalty
-        if self.adaptive_kl and self.step_count < self.kl_warmup_steps:
-            kl_coef = self.kl_penalty_coef * (self.step_count / self.kl_warmup_steps)
+        # CRITICAL FIX: Use adaptive KL coefficient instead of ignoring it
+        if ADAPTIVE_KL_BETA and hasattr(self, '_adaptive_kl_coef'):
+            kl_coef = float(self._adaptive_kl_coef)  # Use the adapted value we just computed
         else:
-            kl_coef = self.kl_penalty_coef
+            kl_coef = float(self.kl_penalty_coef)  # Fallback to static value
+        
+        # Apply warmup if configured
+        if getattr(self, "kl_warmup_steps", 0) and self.step_count < self.kl_warmup_steps:
+            kl_coef *= (self.step_count / self.kl_warmup_steps)
         
         kl_penalty = kl_coef * kl_divergence
         
