@@ -205,9 +205,10 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
                 logger.error("❌ CRITICAL: No sample-time logprobs collected from trajectories!")
                 raise RuntimeError("Cannot compute PPO ratios without sample-time logprobs")
             
-            # Normalize advantages
+            # Normalize advantages using masked normalization to avoid schema contamination
             if self.grpo_config.get("normalize_advantages", True):
-                advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+                # Will be properly normalized after unforced mask is computed
+                pass
             
             # CRITICAL FIX: Use stored sample-time logprobs correctly for PPO
             # PPO ratio = exp(current_policy_logprob - sample_time_logprob)
@@ -284,15 +285,31 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
         unforced_count = unforced_mask.sum().item()
         logger.info(f"Mask stats: {forced_count} forced, {unforced_count} unforced out of {len(forced_mask)} total")
         
-        # NEW: Load stability config parameters
+        # NEW: Load stability config parameters (mathematically grounded)
         import os
+        import math
+        from training.utils.ppo_diagnostics import PPODiagnostics, normalize_advantages_masked
+        
         grpo_cfg = self.grpo_config if hasattr(self, 'grpo_config') else {}
+        
+        # Core stability parameters
+        KL_TARGET = float(os.getenv("KL_TARGET", grpo_cfg.get("kl_target", 0.4)))
         KL_HARD_CAP = float(os.getenv("KL_HARD_CAP", grpo_cfg.get("kl_hard_cap", 3.0)))
+        KL_TOLERANCE = float(os.getenv("KL_TOLERANCE", grpo_cfg.get("kl_tolerance", 0.15)))
+        ADAPTIVE_KL_BETA = bool(os.getenv("ADAPTIVE_KL_BETA", grpo_cfg.get("adaptive_kl_beta", True)))
+        
+        # Token filtering parameters  
         MIN_UNFORCED_TOKENS = int(os.getenv("MIN_UNFORCED_TOKENS_PER_STEP", grpo_cfg.get("min_unforced_tokens_per_step", 16)))
-        MIN_UNFORCED_FRACTION = float(os.getenv("MIN_UNFORCED_FRACTION_PER_STEP", grpo_cfg.get("min_unforced_fraction_per_step", 0.0)))
-        MAX_RATIO_PER_TOKEN = float(os.getenv("MAX_RATIO_PER_TOKEN", grpo_cfg.get("max_ratio_per_token", 3.0)))
-        if MAX_RATIO_PER_TOKEN <= 0:
-            MAX_RATIO_PER_TOKEN = None  # disabled
+        MIN_UNFORCED_FRACTION = float(os.getenv("MIN_UNFORCED_FRACTION_PER_STEP", grpo_cfg.get("min_unforced_fraction_per_step", 0.30)))
+        MIN_RATIO_PER_TOKEN = float(os.getenv("MIN_RATIO_PER_TOKEN", grpo_cfg.get("min_ratio_per_token", 0.25)))
+        MAX_RATIO_PER_TOKEN = float(os.getenv("MAX_RATIO_PER_TOKEN", grpo_cfg.get("max_ratio_per_token", 4.0)))
+        
+        # Initialize adaptive KL coefficient
+        if not hasattr(self, '_adaptive_kl_coef'):
+            self._adaptive_kl_coef = float(grpo_cfg.get("kl_penalty_coef", 0.2))
+        
+        # Initialize diagnostics
+        diagnostics = PPODiagnostics(clip_range=grpo_cfg.get("clip_ratio", 0.2))
         
         # NEW: Build per-step boundaries for minimum unforced token gating
         step_boundaries = []
@@ -350,6 +367,16 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
         unforced_mask = enhanced_mask
         unforced_count = unforced_mask.sum().item()
         
+        # Apply proper advantage normalization using only unforced tokens
+        if self.grpo_config.get("normalize_advantages", True) and unforced_mask.any():
+            from training.utils.ppo_diagnostics import normalize_advantages_masked
+            advantages = normalize_advantages_masked(advantages, unforced_mask)
+            logger.debug("Applied masked advantage normalization")
+        elif self.grpo_config.get("normalize_advantages", True):
+            # Fallback to standard normalization if no unforced tokens
+            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+            logger.debug("Applied standard advantage normalization (fallback)")
+        
         if unforced_count == 0:
             # CRITICAL: Allow training on forced actions when no unforced are available
             # This is necessary for bootstrapping when the model hasn't learned the format yet
@@ -405,44 +432,95 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
 
         # Extract unforced data with safety checks
         if unforced_mask.any():
-            # NEW: Per-token ratio gating (drop extreme ratios before extraction)
-            if MAX_RATIO_PER_TOKEN is not None:
-                # Check for extreme ratios
-                extreme_mask = (ratios_full > MAX_RATIO_PER_TOKEN) | (ratios_full < 1.0/MAX_RATIO_PER_TOKEN)
-                extreme_count = int(extreme_mask.sum())
+            # NEW: Symmetric ratio gating in log-space (mathematically superior)
+            log_ratios_full = torch.log(ratios_full.clamp_min(1e-8))
+            log_ratio_threshold = math.log(MAX_RATIO_PER_TOKEN)
+            
+            # Symmetric bounds: |log(r)| <= log(max_ratio)
+            extreme_mask = log_ratios_full.abs() > log_ratio_threshold
+            extreme_count = int(extreme_mask.sum())
+            
+            if extreme_count > 0:
+                # Update unforced mask to exclude extreme positions
+                before_count = int(unforced_mask.sum())
+                unforced_mask = unforced_mask & ~extreme_mask
+                after_count = int(unforced_mask.sum())
                 
-                if extreme_count > 0:
-                    # Update unforced mask to exclude extreme positions
-                    before_count = int(unforced_mask.sum())
-                    unforced_mask = unforced_mask & ~extreme_mask
-                    after_count = int(unforced_mask.sum())
-                    
-                    logger.warning(f"Token ratio gating: dropped {extreme_count} tokens with "
-                                 f"ratio outside [{1.0/MAX_RATIO_PER_TOKEN:.3f}, {MAX_RATIO_PER_TOKEN:.3f}] "
-                                 f"(eligible tokens: {before_count} → {after_count})")
-                    
-                    if after_count == 0:
-                        logger.warning("No eligible tokens after ratio gating; skipping update.")
-                        return {
-                            "policy_loss": 0.0,
-                            "value_loss": 0.0,
-                            "total_loss": 0.0,
-                            "kl_divergence": 0.0,
-                            "ppo_ratio_mean": 1.0,
-                            "ppo_ratio_std": 0.0,
-                            "advantages_mean": 0.0,
-                            "advantages_std": 0.0,
-                            "grad_norm": 0.0,
-                            "skipped": True,
-                            "skip_reason": "no_tokens_after_ratio_gating",
-                            "dropped_steps": dropped_steps,
-                            "kept_steps": len(kept_steps)
-                        }
+                logger.warning(f"Token ratio gating: dropped {extreme_count} tokens with "
+                             f"|log_ratio| > {log_ratio_threshold:.3f} "
+                             f"(eligible tokens: {before_count} → {after_count})")
+                
+                if after_count == 0:
+                    logger.warning("No eligible tokens after ratio gating; skipping update.")
+                    return {
+                        "policy_loss": 0.0,
+                        "value_loss": 0.0,
+                        "total_loss": 0.0,
+                        "kl_divergence": 0.0,
+                        "ppo_ratio_mean": 1.0,
+                        "ppo_ratio_std": 0.0,
+                        "advantages_mean": 0.0,
+                        "advantages_std": 0.0,
+                        "grad_norm": 0.0,
+                        "skipped": True,
+                        "skip_reason": "no_tokens_after_ratio_gating",
+                        "dropped_steps": dropped_steps,
+                        "kept_steps": len(kept_steps)
+                    }
+            
+            # Compute KL divergence penalty (masked and unmasked for diagnostics) 
+            # Do this before diagnostics so kl_per_token is available
+            log_ratio = torch.clamp(current_log_probs - ref_log_probs, min=-10.0, max=10.0)
+            kl_per_token = 0.5 * log_ratio ** 2  # Per-token KL contributions
+            
+            if unforced_mask.any():
+                kl_masked = torch.mean(kl_per_token[unforced_mask])  # Only learnable tokens
+                kl_unmasked = torch.mean(kl_per_token)  # All tokens
+            else:
+                kl_masked = torch.mean(kl_per_token)
+                kl_unmasked = kl_masked
+            
+            # Use masked KL for training decisions
+            kl_divergence = torch.clamp(kl_masked, min=0.0, max=100.0)
             
             # Extract after all gating
             log_ratios = log_ratios_full[unforced_mask]
             ratios = ratios_full[unforced_mask]
             adv_unforced = advantages[unforced_mask]
+            
+            # NEW: Compute comprehensive PPO diagnostics from mathematical analysis
+            token_alignment = 1.0  # Default - will be computed if token IDs available
+            if hasattr(trajectories[0], 'prompt_token_ids_hf') and hasattr(trajectories[0], 'action_token_ids'):
+                # Compute token alignment across all trajectories
+                total_matches = 0
+                total_comparisons = 0
+                for traj in trajectories:
+                    for step_idx in range(traj.length):
+                        if (hasattr(traj, 'prompt_token_ids_hf') and traj.prompt_token_ids_hf and
+                            hasattr(traj, 'action_token_ids') and traj.action_token_ids):
+                            old_tokens = traj.prompt_token_ids_hf[step_idx] if step_idx < len(traj.prompt_token_ids_hf) else []
+                            new_tokens = traj.action_token_ids[step_idx] if step_idx < len(traj.action_token_ids) else []
+                            min_len = min(len(old_tokens), len(new_tokens))
+                            if min_len > 0:
+                                matches = sum(1 for o, n in zip(old_tokens[:min_len], new_tokens[:min_len]) if o == n)
+                                total_matches += matches
+                                total_comparisons += min_len
+                if total_comparisons > 0:
+                    token_alignment = total_matches / total_comparisons
+            
+            ppo_diags = diagnostics.compute_diagnostics(
+                ratios=ratios_full,
+                advantages=advantages,
+                unforced_mask=unforced_mask,
+                kl_per_token=kl_per_token if 'kl_per_token' in locals() else None
+            )
+            
+            # Override with computed alignment if available
+            if token_alignment < 1.0:
+                ppo_diags['token_alignment'] = token_alignment
+            
+            # Log comprehensive diagnostics
+            diagnostics.log_summary()
             
             # SANITY CHECK: Log ratio statistics
             ratio_mean = ratios.mean().item() if ratios.numel() > 0 else 1.0
@@ -486,17 +564,21 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
             # For metrics, use full ratios for forced steps
             ratios = ratios_full
         
-        # Compute KL divergence penalty
-        log_ratio = torch.clamp(current_log_probs - ref_log_probs, min=-10.0, max=10.0)
-        if unforced_mask.any():
-            kl_divergence = torch.mean((log_ratio[unforced_mask]) ** 2) * 0.5
-        else:
-            kl_divergence = torch.mean(log_ratio ** 2) * 0.5
-        # Additional clamp on KL divergence itself
-        kl_divergence = torch.clamp(kl_divergence, min=0.0, max=100.0)
+        # KL divergence already computed above before PPO diagnostics
         
-        # CRITICAL: KL hard-cap to prevent catastrophic updates (using config value)
-        kl_value = kl_divergence.item()
+        # Adaptive KL coefficient based on target
+        if ADAPTIVE_KL_BETA and hasattr(self, '_adaptive_kl_coef'):
+            kl_value = kl_divergence.item()
+            if kl_value > (1 + KL_TOLERANCE) * KL_TARGET:
+                self._adaptive_kl_coef *= 1.5
+            elif kl_value < (1 - KL_TOLERANCE) * KL_TARGET:
+                self._adaptive_kl_coef /= 1.5
+            self._adaptive_kl_coef = float(max(1e-6, min(self._adaptive_kl_coef, 10.0)))
+            logger.info(f"KL (masked)={kl_value:.3f} target={KL_TARGET:.3f} beta={self._adaptive_kl_coef:.5f}")
+        else:
+            kl_value = kl_divergence.item()
+        
+        # CRITICAL: KL hard-cap to prevent catastrophic updates 
         if KL_HARD_CAP is not None and kl_value > KL_HARD_CAP:
             logger.warning(f"⏭️ Skipping update due to excessive KL={kl_value:.2f} (> {KL_HARD_CAP})")
             # Zero gradients and return early
@@ -684,6 +766,21 @@ class GRPOTrainerGradientFix(GRPOTrainerFixedRefPolicy):
             "stability/kl_hard_cap": KL_HARD_CAP if 'KL_HARD_CAP' in locals() else 3.0,
             "stability/min_unforced_tokens": MIN_UNFORCED_TOKENS if 'MIN_UNFORCED_TOKENS' in locals() else 16,
         }
+        
+        # Add comprehensive PPO diagnostics to metrics
+        if 'ppo_diags' in locals() and ppo_diags:
+            for key, value in ppo_diags.items():
+                metrics[f"ppo_diag/{key}"] = value
+        
+        # Add adaptive KL coefficient if available
+        if hasattr(self, '_adaptive_kl_coef'):
+            metrics["stability/adaptive_kl_coef"] = float(self._adaptive_kl_coef)
+        
+        # Add masked vs unmasked KL metrics
+        if 'kl_masked' in locals() and 'kl_unmasked' in locals():
+            metrics["kl_masked"] = kl_masked.item() if hasattr(kl_masked, 'item') else float(kl_masked)
+            metrics["kl_unmasked"] = kl_unmasked.item() if hasattr(kl_unmasked, 'item') else float(kl_unmasked)
+            metrics["kl_schema_overhead"] = metrics["kl_unmasked"] - metrics["kl_masked"]
         
         if value_loss != 0:
             metrics["value_loss"] = value_loss.item()

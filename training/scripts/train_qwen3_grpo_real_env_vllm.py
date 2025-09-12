@@ -405,7 +405,7 @@ class VLLMQwenPolicy:
         # Expose which outputs were forced
         self.last_forced_mask = last_forced_mask
         
-        # ENHANCED RETURN: Include per-token logprobs for PPO training
+        # ENHANCED RETURN: Include per-token logprobs and alignment data for PPO training
         # Return structured data with both text and logprob information
         enhanced_responses = []
         for i, response_text in enumerate(processed_responses):
@@ -414,9 +414,34 @@ class VLLMQwenPolicy:
             token_ids = self.last_sample_token_ids[i] if i < len(self.last_sample_token_ids) else []
             logprob_sum = sum(token_logprobs) if token_logprobs else 0.0
             
+            # CRITICAL: Store prompt token IDs for alignment verification
+            prompt_text = formatted_inputs[i] if i < len(formatted_inputs) else ""
+            prompt_token_ids_hf = self.tokenizer.encode(
+                prompt_text, 
+                add_special_tokens=False,
+                return_tensors="pt"
+            ).squeeze(0)  # Remove batch dimension
+            
+            # Create per-token unforced mask using robust text-span method
+            from training.utils.token_masking import create_token_mask_from_text, log_mask_stats
+            
+            action_token_ids = token_ids if token_ids else []
+            if len(action_token_ids) > 0:
+                token_unforced_mask = create_token_mask_from_text(
+                    response_text, 
+                    action_token_ids, 
+                    self.tokenizer
+                )
+                # Log mask statistics for monitoring
+                log_mask_stats(token_unforced_mask, response_text, logger)
+            else:
+                token_unforced_mask = torch.empty(0, dtype=torch.bool)
+            
             enhanced_responses.append({
                 "text": response_text,
                 "token_ids": torch.tensor(token_ids, dtype=torch.long) if token_ids else torch.empty(0, dtype=torch.long),
+                "prompt_token_ids_hf": prompt_token_ids_hf,  # NEW: For alignment
+                "token_unforced_mask": token_unforced_mask,  # NEW: Per-token masking
                 "token_logprobs": torch.tensor(token_logprobs, dtype=torch.float32) if token_logprobs else torch.empty(0, dtype=torch.float32),
                 "logprob_sum": float(logprob_sum),
                 "was_forced": last_forced_mask[i] if i < len(last_forced_mask) else False
